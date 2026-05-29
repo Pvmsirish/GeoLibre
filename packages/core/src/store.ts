@@ -26,6 +26,7 @@ export interface AppState {
   layers: GeoLibreLayer[];
   selectedLayerId: string | null;
   selectedFeatureId: string | null;
+  identifyLayerId: string | null;
   pointerCoords: [number, number] | null;
   metadata: Record<string, unknown>;
   recentProjects: RecentProjectEntry[];
@@ -33,6 +34,7 @@ export interface AppState {
   ui: {
     processingOpen: boolean;
     attributeTableOpen: boolean;
+    zoomToSelectedFeature: boolean;
   };
 
   setPointerCoords: (coords: [number, number] | null) => void;
@@ -40,9 +42,11 @@ export interface AppState {
   setBasemapStyleUrl: (url: string) => void;
   selectLayer: (id: string | null) => void;
   selectFeature: (id: string | null) => void;
+  setIdentifyLayer: (id: string | null) => void;
   setAttributeFilter: (filter: string) => void;
   setProcessingOpen: (open: boolean) => void;
   setAttributeTableOpen: (open: boolean) => void;
+  setZoomToSelectedFeature: (enabled: boolean) => void;
 
   newProject: (options?: CreateProjectOptions & { name?: string }) => void;
   loadProject: (project: GeoLibreProject, path?: string | null) => void;
@@ -74,6 +78,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   layers: [],
   selectedLayerId: null,
   selectedFeatureId: null,
+  identifyLayerId: null,
   pointerCoords: null,
   metadata: {},
   recentProjects: [],
@@ -81,6 +86,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   ui: {
     processingOpen: false,
     attributeTableOpen: false,
+    zoomToSelectedFeature: false,
   },
 
   setPointerCoords: (coords) => set({ pointerCoords: coords }),
@@ -92,11 +98,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   setBasemapStyleUrl: (url) => set({ basemapStyleUrl: url, isDirty: true }),
   selectLayer: (id) => set({ selectedLayerId: id, selectedFeatureId: null }),
   selectFeature: (id) => set({ selectedFeatureId: id }),
+  setIdentifyLayer: (id) => set({ identifyLayerId: id }),
   setAttributeFilter: (filter) => set({ attributeFilter: filter }),
   setProcessingOpen: (open) =>
     set((s) => ({ ui: { ...s.ui, processingOpen: open } })),
   setAttributeTableOpen: (open) =>
     set((s) => ({ ui: { ...s.ui, attributeTableOpen: open } })),
+  setZoomToSelectedFeature: (enabled) =>
+    set((s) => ({ ui: { ...s.ui, zoomToSelectedFeature: enabled } })),
 
   newProject: (options = {}) => {
     const project = createEmptyProject(options.name, options);
@@ -107,6 +116,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       isDirty: false,
       selectedLayerId: null,
       selectedFeatureId: null,
+      identifyLayerId: null,
       pointerCoords: null,
       attributeFilter: "",
     });
@@ -120,6 +130,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       isDirty: false,
       selectedLayerId: applied.layers[0]?.id ?? null,
       selectedFeatureId: null,
+      identifyLayerId: null,
     });
     if (path) {
       const entry: RecentProjectEntry = {
@@ -169,6 +180,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         s.selectedLayerId === id
           ? (s.layers.find((l) => l.id !== id)?.id ?? null)
           : s.selectedLayerId,
+      selectedFeatureId: s.selectedLayerId === id ? null : s.selectedFeatureId,
+      identifyLayerId: s.identifyLayerId === id ? null : s.identifyLayerId,
       isDirty: true,
     })),
 

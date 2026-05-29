@@ -1,4 +1,8 @@
-import { useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type RefObject,
+  useState,
+} from "react";
 import { useAppStore } from "@geolibre/core";
 import type { GeoLibreLayer } from "@geolibre/core";
 import type { MapController } from "@geolibre/map";
@@ -21,6 +25,7 @@ import {
   EyeOff,
   Info,
   Layers,
+  MousePointerClick,
   PanelLeftClose,
   PanelLeftOpen,
   Trash2,
@@ -28,7 +33,8 @@ import {
 } from "lucide-react";
 
 interface LayerPanelProps {
-  mapControllerRef: React.RefObject<MapController | null>;
+  mapControllerRef: RefObject<MapController | null>;
+  onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void;
 }
 
 function isMobileViewport(): boolean {
@@ -38,10 +44,15 @@ function isMobileViewport(): boolean {
   );
 }
 
-export function LayerPanel({ mapControllerRef }: LayerPanelProps) {
+export function LayerPanel({
+  mapControllerRef,
+  onResizeStart,
+}: LayerPanelProps) {
   const layers = useAppStore((s) => s.layers);
   const selectedLayerId = useAppStore((s) => s.selectedLayerId);
   const selectLayer = useAppStore((s) => s.selectLayer);
+  const identifyLayerId = useAppStore((s) => s.identifyLayerId);
+  const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
   const setLayerVisibility = useAppStore((s) => s.setLayerVisibility);
   const setLayerOpacity = useAppStore((s) => s.setLayerOpacity);
   const reorderLayer = useAppStore((s) => s.reorderLayer);
@@ -75,7 +86,16 @@ export function LayerPanel({ mapControllerRef }: LayerPanelProps) {
   }
 
   return (
-    <aside className="flex max-h-56 w-full shrink-0 flex-col border-b bg-card md:max-h-none md:w-64 md:border-b-0 md:border-r">
+    <aside
+      className="relative flex max-h-56 w-full shrink-0 flex-col border-b bg-card md:max-h-none md:w-[var(--layer-panel-width)] md:border-b-0 md:border-r"
+    >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize Layers panel"
+        className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize select-none border-r border-transparent hover:border-primary md:block"
+        onMouseDown={onResizeStart}
+      />
       <div className="flex items-center justify-between border-b px-3 py-1.5">
         <span className="text-sm font-semibold">Layers</span>
         <Button
@@ -96,131 +116,161 @@ export function LayerPanel({ mapControllerRef }: LayerPanelProps) {
               No layers. Add data from the toolbar.
             </p>
           )}
-          {[...layers].reverse().map((layer) => (
-            <div
-              key={layer.id}
-              className={`rounded-md border p-2 ${
-                selectedLayerId === layer.id
-                  ? "border-primary bg-primary/5"
-                  : "border-transparent bg-muted/30"
-              }`}
-              onClick={() => selectLayer(layer.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") selectLayer(layer.id);
-              }}
-              role="button"
-              tabIndex={0}
-            >
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  className="rounded p-0.5 hover:bg-muted"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setLayerVisibility(layer.id, !layer.visible);
-                  }}
-                >
-                  {layer.visible ? (
-                    <Eye className="h-3.5 w-3.5" />
-                  ) : (
-                    <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
-                </button>
-                <span className="flex-1 truncate text-sm font-medium">
-                  {layer.name}
-                </span>
-                <span className="text-[10px] uppercase text-muted-foreground">
-                  {layer.type}
-                </span>
-              </div>
-              {isPlaceholderLayer(layer) && (
-                <p className="mt-1 text-[10px] text-amber-600">
-                  {placeholderMessage(layer)}
-                </p>
-              )}
-              <div className="mt-2 flex items-center gap-1">
-                <span className="text-[10px] text-muted-foreground">Opacity</span>
-                <Slider
-                  className="flex-1"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={[layer.opacity]}
-                  onValueChange={([v]) =>
-                    setLayerOpacity(layer.id, v ?? layer.opacity)
-                  }
-                  onClick={(e) => e.stopPropagation()}
-                />
-              </div>
-              <div className="mt-2 flex gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  title="Move up"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    reorderLayer(layer.id, "up");
-                  }}
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  title="Move down"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    reorderLayer(layer.id, "down");
-                  }}
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  title="Zoom to layer"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (layer.geojson) {
-                      mapControllerRef.current?.fitLayer(layer);
-                    } else {
-                      // TODO(v0.3): zoom to layer for non-GeoJSON types
-                      console.info("Zoom to layer not available for this type");
+          {[...layers].reverse().map((layer) => {
+            const canIdentify =
+              layer.type === "geojson" || layer.type === "vector-tiles";
+            const identifyActive = identifyLayerId === layer.id;
+            return (
+              <div
+                key={layer.id}
+                className={`rounded-md border p-2 ${
+                  selectedLayerId === layer.id
+                    ? "border-primary bg-primary/5"
+                    : "border-transparent bg-muted/30"
+                }`}
+                onClick={() => selectLayer(layer.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") selectLayer(layer.id);
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="rounded p-0.5 hover:bg-muted"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLayerVisibility(layer.id, !layer.visible);
+                    }}
+                  >
+                    {layer.visible ? (
+                      <Eye className="h-3.5 w-3.5" />
+                    ) : (
+                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                  </button>
+                  <span className="flex-1 truncate text-sm font-medium">
+                    {layer.name}
+                  </span>
+                  <span className="text-[10px] uppercase text-muted-foreground">
+                    {layer.type}
+                  </span>
+                </div>
+                {isPlaceholderLayer(layer) && (
+                  <p className="mt-1 text-[10px] text-amber-600">
+                    {placeholderMessage(layer)}
+                  </p>
+                )}
+                <div className="mt-2 flex items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground">Opacity</span>
+                  <Slider
+                    className="flex-1"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={[layer.opacity]}
+                    onValueChange={([v]) =>
+                      setLayerOpacity(layer.id, v ?? layer.opacity)
                     }
-                  }}
-                >
-                  <ZoomIn className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  title="Metadata"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMetadataLayer(layer);
-                  }}
-                >
-                  <Info className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-destructive"
-                  title="Remove layer"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setLayerPendingRemoval(layer);
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+                <div className="mt-2 flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Move up"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      reorderLayer(layer.id, "up");
+                    }}
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Move down"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      reorderLayer(layer.id, "down");
+                    }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Zoom to layer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (layer.geojson) {
+                        mapControllerRef.current?.fitLayer(layer);
+                      } else {
+                        // TODO(v0.3): zoom to layer for non-GeoJSON types
+                        console.info("Zoom to layer not available for this type");
+                      }
+                    }}
+                  >
+                    <ZoomIn className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-7 w-7 ${
+                      identifyActive
+                        ? "border border-primary bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 hover:text-primary-foreground"
+                        : ""
+                    }`}
+                    title={
+                      canIdentify
+                        ? identifyActive
+                          ? "Deactivate identify"
+                          : "Identify features"
+                        : "Identify is only available for vector layers"
+                    }
+                    disabled={!canIdentify}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!canIdentify) return;
+                      selectLayer(layer.id);
+                      setIdentifyLayer(identifyActive ? null : layer.id);
+                    }}
+                  >
+                    <MousePointerClick className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Metadata"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMetadataLayer(layer);
+                    }}
+                  >
+                    <Info className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-destructive"
+                    title="Remove layer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLayerPendingRemoval(layer);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </ScrollArea>
       <Separator />
