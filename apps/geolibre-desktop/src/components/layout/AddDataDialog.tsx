@@ -5,7 +5,10 @@ import {
 } from "@geolibre/core";
 import type { MapController } from "@geolibre/map";
 import {
+  addArcGISLayer,
   addCogRasterLayer,
+  type ArcGISLayerType,
+  type ArcGISSourceType,
   type CogRasterLayerOptions,
 } from "@geolibre/plugins";
 import {
@@ -39,7 +42,13 @@ import {
   type MbtilesMetadata,
 } from "../../lib/mbtiles";
 
-export type AddDataKind = "xyz" | "wms" | "vector" | "raster" | "mbtiles";
+export type AddDataKind =
+  | "xyz"
+  | "wms"
+  | "vector"
+  | "raster"
+  | "mbtiles"
+  | "arcgis";
 
 interface AddDataDialogProps {
   kind: AddDataKind | null;
@@ -57,6 +66,7 @@ const KIND_LABELS: Record<AddDataKind, string> = {
   vector: "Add Vector Layer",
   raster: "Add Raster Layer",
   mbtiles: "Add MBTiles Layer",
+  arcgis: "Add ArcGIS Layer",
 };
 
 const SELECT_CLASS =
@@ -77,6 +87,14 @@ const COG_COLORMAPS = [
 
 const DEFAULT_RASTER_URL =
   "https://data.source.coop/giswqs/opengeos/nlcd_2021_land_cover_30m.tif";
+const DEFAULT_ARCGIS_FEATURE_URL =
+  "https://services3.arcgis.com/GVgbJbqm8hXASVYi/arcgis/rest/services/USA_Major_Cities/FeatureServer/0";
+const DEFAULT_ARCGIS_VECTOR_TILE_URL =
+  "https://vectortileservices3.arcgis.com/GVgbJbqm8hXASVYi/arcgis/rest/services/Santa_Monica_parcels_VTL/VectorTileServer";
+const DEFAULT_ARCGIS_URLS: Record<ArcGISLayerType, string> = {
+  feature: DEFAULT_ARCGIS_FEATURE_URL,
+  "vector-tile": DEFAULT_ARCGIS_VECTOR_TILE_URL,
+};
 
 function createLayerId(): string {
   return crypto.randomUUID();
@@ -220,6 +238,14 @@ export function AddDataDialog({
     path: string;
   } | null>(null);
   const [mbtilesSourceLayers, setMbtilesSourceLayers] = useState("");
+  const [arcgisLayerType, setArcgisLayerType] =
+    useState<ArcGISLayerType>("feature");
+  const [arcgisSourceType, setArcgisSourceType] =
+    useState<ArcGISSourceType>("url");
+  const [arcgisUrl, setArcgisUrl] = useState(DEFAULT_ARCGIS_FEATURE_URL);
+  const [arcgisItemId, setArcgisItemId] = useState("");
+  const [arcgisPortalUrl, setArcgisPortalUrl] = useState("");
+  const [arcgisAccessToken, setArcgisAccessToken] = useState("");
 
   useEffect(() => {
     if (!kind) return;
@@ -232,6 +258,7 @@ export function AddDataDialog({
         vector: "Vector Layer",
         raster: "Raster Layer",
         mbtiles: "MBTiles Layer",
+        arcgis: "ArcGIS Layer",
       }[kind],
     );
     setBeforeLayerId("");
@@ -258,6 +285,12 @@ export function AddDataDialog({
     setSelectedRasterPath(null);
     setSelectedMbtiles(null);
     setMbtilesSourceLayers("");
+    setArcgisLayerType("feature");
+    setArcgisSourceType("url");
+    setArcgisUrl(DEFAULT_ARCGIS_FEATURE_URL);
+    setArcgisItemId("");
+    setArcgisPortalUrl("");
+    setArcgisAccessToken("");
   }, [kind]);
 
   const description = useMemo(() => {
@@ -276,6 +309,9 @@ export function AddDataDialog({
     if (kind === "mbtiles") {
       return "Add a local MBTiles file as a raster or vector tile layer.";
     }
+    if (kind === "arcgis") {
+      return "Add an ArcGIS FeatureServer layer, VectorTileServer layer, or portal item.";
+    }
     return "";
   }, [kind]);
 
@@ -287,6 +323,17 @@ export function AddDataDialog({
   };
 
   const beforeLayer = beforeLayerId.trim() || null;
+
+  const handleArcgisLayerTypeChange = (nextLayerType: ArcGISLayerType) => {
+    const currentUrl = arcgisUrl.trim();
+    setArcgisLayerType(nextLayerType);
+    if (
+      !currentUrl ||
+      Object.values(DEFAULT_ARCGIS_URLS).includes(currentUrl)
+    ) {
+      setArcgisUrl(DEFAULT_ARCGIS_URLS[nextLayerType]);
+    }
+  };
 
   const addAndClose = (layer: GeoLibreLayer) => {
     addLayer(layer, beforeLayer);
@@ -493,6 +540,21 @@ export function AddDataDialog({
             },
           ),
         );
+        return;
+      }
+
+      if (kind === "arcgis") {
+        await addArcGISLayer(createAppAPI(mapControllerRef), {
+          beforeLayerId: beforeLayer,
+          itemId: arcgisItemId.trim() || undefined,
+          layerType: arcgisLayerType,
+          name,
+          portalUrl: arcgisPortalUrl.trim() || undefined,
+          sourceType: arcgisSourceType,
+          token: arcgisAccessToken.trim() || undefined,
+          url: arcgisUrl.trim() || undefined,
+        });
+        closeDialog();
         return;
       }
 
@@ -786,6 +848,89 @@ export function AddDataDialog({
                   />
                 </div>
               )}
+            </div>
+          )}
+
+          {kind === "arcgis" && (
+            <div className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="arcgis-layer-type">Layer type</Label>
+                  <select
+                    id="arcgis-layer-type"
+                    className={SELECT_CLASS}
+                    value={arcgisLayerType}
+                    onChange={(event) =>
+                      handleArcgisLayerTypeChange(
+                        event.target.value as ArcGISLayerType,
+                      )
+                    }
+                  >
+                    <option value="feature">Feature layer</option>
+                    <option value="vector-tile">Vector tile layer</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="arcgis-source-type">Source type</Label>
+                  <select
+                    id="arcgis-source-type"
+                    className={SELECT_CLASS}
+                    value={arcgisSourceType}
+                    onChange={(event) =>
+                      setArcgisSourceType(event.target.value as ArcGISSourceType)
+                    }
+                  >
+                    <option value="url">Service URL</option>
+                    <option value="portal-item">Portal item ID</option>
+                  </select>
+                </div>
+              </div>
+              {arcgisSourceType === "url" ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="arcgis-url">Service URL</Label>
+                  <Input
+                    id="arcgis-url"
+                    placeholder={
+                      arcgisLayerType === "feature"
+                        ? "https://services.arcgis.com/.../FeatureServer/0"
+                        : "https://.../arcgis/rest/services/.../VectorTileServer"
+                    }
+                    value={arcgisUrl}
+                    onChange={(event) => setArcgisUrl(event.target.value)}
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label htmlFor="arcgis-item-id">Portal item ID</Label>
+                  <Input
+                    id="arcgis-item-id"
+                    value={arcgisItemId}
+                    onChange={(event) => setArcgisItemId(event.target.value)}
+                  />
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="arcgis-portal-url">Portal URL</Label>
+                <Input
+                  id="arcgis-portal-url"
+                  placeholder="https://www.arcgis.com/sharing/rest"
+                  value={arcgisPortalUrl}
+                  onChange={(event) => setArcgisPortalUrl(event.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="arcgis-access-token">Access token</Label>
+                <Input
+                  id="arcgis-access-token"
+                  type="password"
+                  autoComplete="off"
+                  placeholder="Optional"
+                  value={arcgisAccessToken}
+                  onChange={(event) =>
+                    setArcgisAccessToken(event.target.value)
+                  }
+                />
+              </div>
             </div>
           )}
 
