@@ -266,7 +266,7 @@ export function AttributeTable() {
       for (const k of Object.keys(f.properties)) propKeys.add(k);
     }
   }
-  const columns = Array.from(propKeys).slice(0, 8);
+  const columns = Array.from(propKeys);
   const tableColumns = ["__featureId", ...columns];
 
   const columnWidth = (key: SortKey) =>
@@ -274,6 +274,10 @@ export function AttributeTable() {
     (key === "__featureId"
       ? DEFAULT_FEATURE_ID_COLUMN_WIDTH
       : DEFAULT_ATTRIBUTE_COLUMN_WIDTH);
+  const tableWidth = tableColumns.reduce(
+    (width, column) => width + columnWidth(column),
+    0,
+  );
 
   const columnWidthLimits = (key: SortKey) =>
     key === "__featureId"
@@ -749,16 +753,24 @@ export function AttributeTable() {
           <X className="h-4 w-4" />
         </Button>
       </div>
+      {/*
+        Vertical scrollbar height reserves 3.625rem: 2.75rem for the sticky
+        header (top-11) plus 0.875rem for the horizontal scrollbar (h-3.5),
+        so the two scrollbars do not overlap.
+      */}
       <ScrollArea
         type="always"
-        className="flex-1 [&_[data-orientation=vertical]]:!top-11 [&_[data-orientation=vertical]]:!h-[calc(100%-2.75rem)]"
+        className="flex-1 [&_[data-orientation=vertical]]:!top-11 [&_[data-orientation=vertical]]:!h-[calc(100%-3.625rem)]"
       >
         {!layer?.geojson ? (
           <p className="p-4 text-xs text-muted-foreground">
             Attribute table requires a vector layer.
           </p>
         ) : (
-          <table className="min-w-full table-fixed caption-bottom text-sm">
+          <table
+            className="table-fixed caption-bottom text-sm"
+            style={{ minWidth: "100%", width: tableWidth }}
+          >
             <colgroup>
               {tableColumns.map((col) => (
                 <col key={col} style={{ width: columnWidth(col) }} />
