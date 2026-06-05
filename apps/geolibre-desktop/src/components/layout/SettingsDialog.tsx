@@ -554,7 +554,7 @@ export function SettingsDialog({
             ) : null}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align="start" className="w-56">
           <DropdownMenuLabel>Settings</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -571,7 +571,7 @@ export function SettingsDialog({
               <LayoutPanelTop className="mr-2 h-3.5 w-3.5" />
               Layout
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="min-w-56">
+            <DropdownMenuSubContent className="geolibre-layout-submenu w-40 sm:w-72">
               <DropdownMenuCheckboxItem
                 checked={desktopSettings.layout.toolbarLabels}
                 onCheckedChange={(checked) =>
@@ -584,7 +584,9 @@ export function SettingsDialog({
               <DropdownMenuCheckboxItem
                 checked={desktopSettings.layout.showProjectInfo}
                 onCheckedChange={(checked) =>
-                  updateSavedLayoutSettings({ showProjectInfo: checked === true })
+                  updateSavedLayoutSettings({
+                    showProjectInfo: checked === true,
+                  })
                 }
                 onSelect={(event) => event.preventDefault()}
               >
@@ -634,9 +636,9 @@ export function SettingsDialog({
                 Layout Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <p className="px-2 py-1 text-xs text-muted-foreground">
+              <DropdownMenuLabel className="px-2 py-1 text-xs font-normal text-muted-foreground">
                 URL layout parameters override saved settings.
-              </p>
+              </DropdownMenuLabel>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuItem
@@ -669,7 +671,10 @@ export function SettingsDialog({
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[min(88vh,760px)] max-w-3xl overflow-hidden p-0">
+        <DialogContent
+          className="max-h-[min(88vh,760px)] max-w-3xl"
+          bodyClassName="overflow-hidden p-0"
+        >
           <DialogHeader className="border-b px-6 pb-4 pt-6">
             <DialogTitle>Settings</DialogTitle>
             <DialogDescription>

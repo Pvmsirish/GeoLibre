@@ -458,6 +458,7 @@ export function TopToolbar({
   const toolbarButtonSize = compact ? "icon" : "sm";
   const toolbarButtonClass = compact ? "h-8 w-8 shrink-0" : "shrink-0";
   const toolbarIconClassName = cn("h-3.5 w-3.5", showLabels && "sm:mr-1");
+  const appTitle = isTauri() ? "GeoLibre Desktop" : "GeoLibre";
   const renderToolbarLabel = (label: string) =>
     showLabels ? <span className="hidden sm:inline">{label}</span> : null;
 
@@ -473,7 +474,7 @@ export function TopToolbar({
       <span className="mr-1 flex shrink-0 items-center gap-1.5 text-sm font-semibold text-primary md:mr-2">
         <Map className="h-4 w-4" />
         {showProjectInfo ? (
-          <span className="hidden sm:inline">GeoLibre Desktop</span>
+          <span className="hidden sm:inline">{appTitle}</span>
         ) : null}
       </span>
       <NewProjectDialog
@@ -582,68 +583,87 @@ export function TopToolbar({
             {renderToolbarLabel("Add Data")}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align="start" className="w-64">
           <DropdownMenuLabel>Add data</DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setAddDataKind("xyz")}>
-            Add XYZ Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setAddDataKind("wms")}>
-            Add WMS Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setAddDataKind("wfs")}>
-            Add WFS Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setAddDataKind("wmts")}>
-            Add WMTS Layer
-          </DropdownMenuItem>
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            Files
+          </DropdownMenuLabel>
           <DropdownMenuItem onSelect={() => setAddDataKind("vector")}>
-            Add Vector Layer
+            Vector Layer
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setAddDataKind("raster")}>
-            Add Raster Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void handleAddGeoParquetLayer()}>
-            Add GeoParquet Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddFlatGeobufLayer}>
-            Add FlatGeobuf Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddPMTilesLayer}>
-            Add PMTiles Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setAddDataKind("mbtiles")}>
-            Add MBTiles Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setAddDataKind("arcgis")}>
-            Add ArcGIS Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddZarrLayer}>
-            Add Zarr Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddLidarLayer}>
-            Add LiDAR Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddSplattingLayer}>
-            Add Splatting Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddThreeDTilesLayer}>
-            Add 3D Tiles Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddStacLayer}>
-            Add STAC Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAddDuckDBLayer}>
-            Add DuckDB Layer
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setAddDataKind("postgres")}>
-            Add PostgreSQL Layer
+            Raster Layer
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setAddDataKind("delimited-text")}>
-            Add Delimited Text Layer
+            Delimited Text Layer
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setAddDataKind("gpx")}>
-            Add GPX Layer
+            GPX Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setAddDataKind("mbtiles")}>
+            MBTiles Layer
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            Web services
+          </DropdownMenuLabel>
+          <DropdownMenuItem onSelect={() => setAddDataKind("xyz")}>
+            XYZ Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setAddDataKind("wms")}>
+            WMS Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setAddDataKind("wfs")}>
+            WFS Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setAddDataKind("wmts")}>
+            WMTS Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setAddDataKind("arcgis")}>
+            ArcGIS Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleAddStacLayer}>
+            STAC Layer
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            Cloud formats
+          </DropdownMenuLabel>
+          <DropdownMenuItem onSelect={() => void handleAddGeoParquetLayer()}>
+            GeoParquet Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleAddFlatGeobufLayer}>
+            FlatGeobuf Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleAddPMTilesLayer}>
+            PMTiles Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleAddZarrLayer}>
+            Zarr Layer
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            3D layers
+          </DropdownMenuLabel>
+          <DropdownMenuItem onSelect={handleAddLidarLayer}>
+            LiDAR Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleAddSplattingLayer}>
+            Splatting Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleAddThreeDTilesLayer}>
+            3D Tiles Layer
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            Databases
+          </DropdownMenuLabel>
+          <DropdownMenuItem onSelect={handleAddDuckDBLayer}>
+            DuckDB Layer
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setAddDataKind("postgres")}>
+            PostgreSQL Layer
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
