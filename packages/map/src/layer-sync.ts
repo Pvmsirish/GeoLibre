@@ -14,6 +14,7 @@ import {
   fillLayerId,
   lineLayerId,
   sourceId,
+  textLayerId,
 } from "./geojson-loader";
 import { isPlaceholderLayer } from "./placeholders";
 import {
@@ -29,6 +30,35 @@ const PMTILES_PROTOCOL = "pmtiles";
 const PMTILES_PROTOCOL_GLOBAL_KEY = "__geolibrePMTilesProtocol";
 const MIN_LAYER_ZOOM = DEFAULT_LAYER_STYLE.minZoom;
 const MAX_LAYER_ZOOM = DEFAULT_LAYER_STYLE.maxZoom;
+const TEXT_MARKER_SHAPE = "text_marker";
+const GEOMAN_SHAPE_PROPERTY = "__gm_shape";
+const GEOMAN_TEXT_PROPERTY = "__gm_text";
+
+const pointGeometryFilter: maplibregl.FilterSpecification = [
+  "match",
+  ["geometry-type"],
+  ["Point", "MultiPoint"],
+  true,
+  false,
+];
+
+const textMarkerShapeFilter: maplibregl.FilterSpecification = [
+  "any",
+  ["==", ["get", GEOMAN_SHAPE_PROPERTY], TEXT_MARKER_SHAPE],
+  ["==", ["get", "shape"], TEXT_MARKER_SHAPE],
+];
+
+const textMarkerFilter: maplibregl.FilterSpecification = [
+  "all",
+  pointGeometryFilter,
+  textMarkerShapeFilter,
+];
+
+const nonTextMarkerPointFilter: maplibregl.FilterSpecification = [
+  "all",
+  pointGeometryFilter,
+  ["!", textMarkerShapeFilter],
+];
 
 // Native layer ids whose zoom range GeoLibre has taken over. A pristine external
 // layer keeps its source-declared range, but once the user sets a non-default
@@ -804,6 +834,7 @@ function syncGeoJsonLayer(
 
   const visibility = layer.visible ? "visible" : "none";
   const opacity = layer.opacity;
+  const hasTextMarkers = hasTextMarkerFeatures(layer.geojson!);
 
   if (profile.hasPolygon) {
     if (layer.style.extrusionEnabled) {
@@ -893,13 +924,7 @@ function syncGeoJsonLayer(
         type: "circle",
         source: src,
         ...styleLayerZoomRange(layer.style),
-        filter: [
-          "match",
-          ["geometry-type"],
-          ["Point", "MultiPoint"],
-          true,
-          false,
-        ],
+        filter: hasTextMarkers ? nonTextMarkerPointFilter : pointGeometryFilter,
         paint: circlePaint(layer.style, opacity),
         layout: { visibility },
       },
@@ -908,6 +933,131 @@ function syncGeoJsonLayer(
   } else {
     removeIfExists(map, circleLayerId(layer.id));
   }
+
+  if (!layer.style.extrusionEnabled && hasTextMarkers) {
+    ensureLayer(
+      map,
+      textLayerId(layer.id),
+      {
+        id: textLayerId(layer.id),
+        type: "symbol",
+        source: src,
+        ...styleLayerZoomRange(layer.style),
+        filter: textMarkerFilter,
+        layout: {
+          "text-allow-overlap": true,
+          "text-font": textFontForMapStyle(map),
+          "text-field": [
+            "to-string",
+            [
+              "coalesce",
+              ["get", GEOMAN_TEXT_PROPERTY],
+              ["get", "text"],
+              "",
+            ],
+          ],
+          "text-ignore-placement": true,
+          "text-size": Math.max(1, styleValue(layer.style, "textSize")),
+          visibility,
+        },
+        paint: {
+          "text-color": styleValue(layer.style, "textColor"),
+          "text-halo-color": styleValue(layer.style, "textHaloColor"),
+          "text-halo-width": Math.max(
+            0,
+            styleValue(layer.style, "textHaloWidth"),
+          ),
+          "text-opacity": opacity,
+        },
+      },
+      beforeId,
+    );
+  } else {
+    removeIfExists(map, textLayerId(layer.id));
+  }
+}
+
+// Keep this predicate aligned with textMarkerFilter: any text-marker-shaped
+// point routes to the symbol layer, even with empty text, so features are
+// never excluded from the circle layer without a matching symbol entry.
+function hasTextMarkerFeatures(
+  collection: GeoJSON.FeatureCollection,
+): boolean {
+  return collection.features.some((feature) => {
+    if (
+      feature.geometry?.type !== "Point" &&
+      feature.geometry?.type !== "MultiPoint"
+    ) {
+      return false;
+    }
+    const properties = feature.properties;
+    if (!properties) return false;
+    return (
+      properties[GEOMAN_SHAPE_PROPERTY] === TEXT_MARKER_SHAPE ||
+      properties.shape === TEXT_MARKER_SHAPE
+    );
+  });
+}
+
+// getStyle() deep-clones the whole style, and syncs can fire rapidly (e.g.
+// while dragging an opacity slider), so cache the resolved font per map and
+// invalidate when a new basemap style loads.
+const textFontCache = new WeakMap<maplibregl.Map, string[]>();
+
+function textFontForMapStyle(map: maplibregl.Map): string[] {
+  const cached = textFontCache.get(map);
+  if (cached) return cached;
+  const fonts = resolveTextFontFromStyle(map);
+  textFontCache.set(map, fonts);
+  map.once("style.load", () => textFontCache.delete(map));
+  return fonts;
+}
+
+// Operators that can start a data-driven text-font expression. A bare
+// ["get", "font"] is all strings, so an every(typeof === "string") check
+// alone would mistake it for a font stack.
+const FONT_EXPRESSION_OPERATORS = new Set([
+  "literal",
+  "get",
+  "has",
+  "at",
+  "in",
+  "case",
+  "match",
+  "coalesce",
+  "step",
+  "interpolate",
+  "let",
+  "var",
+  "concat",
+  "to-string",
+  "string",
+  "array",
+  "format",
+]);
+
+function resolveTextFontFromStyle(map: maplibregl.Map): string[] {
+  for (const styleLayer of map.getStyle().layers ?? []) {
+    if (styleLayer.type !== "symbol") continue;
+    // Icon-only symbol layers may carry a glyph/sprite font unsuited to text.
+    if (!styleLayer.layout?.["text-field"]) continue;
+    const textFont = styleLayer.layout?.["text-font"];
+    if (!Array.isArray(textFont)) continue;
+    // Unwrap the ["literal", ["Font A", "Font B"]] expression form used by
+    // many popular styles.
+    const fonts =
+      textFont[0] === "literal" && Array.isArray(textFont[1])
+        ? (textFont[1] as unknown[])
+        : (textFont as unknown[]);
+    if (
+      fonts.length > 0 &&
+      fonts.every((font) => typeof font === "string") &&
+      !FONT_EXPRESSION_OPERATORS.has(fonts[0] as string)
+    ) {
+      return fonts as string[];
+    }
+  }
+  return ["Noto Sans Regular"];
 }
 
 function syncRasterTileLayer(
@@ -1429,6 +1579,13 @@ function ensureLayer(
         map.setLayoutProperty(id, key, value);
       }
     }
+    if ("filter" in spec) {
+      // setFilter invalidates the layer, so skip no-op updates.
+      const current = map.getFilter(id);
+      if (JSON.stringify(current ?? null) !== JSON.stringify(spec.filter ?? null)) {
+        map.setFilter(id, spec.filter);
+      }
+    }
     setLayerZoomRange(map, id, {
       minzoom: spec.minzoom,
       maxzoom: spec.maxzoom,
@@ -1500,6 +1657,7 @@ export function removeLayerFromMap(
     fillExtrusionLayerId(layerId),
     lineLayerId(layerId),
     circleLayerId(layerId),
+    textLayerId(layerId),
     `layer-${layerId}-raster`,
     ...(layer ? vectorTileAllStyleLayerIds(layer) : []),
     vectorTileCircleLayerId(layerId),

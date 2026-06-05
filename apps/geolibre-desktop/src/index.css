@@ -52,6 +52,15 @@ body,
   margin: 0;
 }
 
+.geo-editor-control .geo-editor-tool-button[data-mode="text_marker"] svg {
+  height: 24px;
+  width: 24px;
+}
+
+.geo-editor-control .geo-editor-tool-button[data-mode="text_marker"] svg text {
+  font-size: 18px;
+}
+
 .geolibre-esri-wayback-control,
 .esri-wayback-control-panel {
   color-scheme: light;
