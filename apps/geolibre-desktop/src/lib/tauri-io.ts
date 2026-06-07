@@ -11,6 +11,7 @@ import {
 import { unzip } from "fflate";
 import type { FeatureCollection } from "geojson";
 import shp from "shpjs";
+import { parseDelimitedTextFields } from "./delimited-text";
 import type { DuckDbVectorFile } from "./duckdb-vector-loader";
 import { parseGpxLayer } from "./gpx";
 
@@ -1015,22 +1016,22 @@ export async function loadDroppedVectorPaths(
 export function parseCsvHeaderLine(line: string): string[] {
   const header = line.replace(/^﻿/, "").replace(/[\r\n]+$/, "");
   if (!header) return [];
-  // Pick the delimiter that yields the most fields (comma, tab, or semicolon).
-  // Strip outer quotes from each token first so a quoted field containing the
-  // candidate delimiter (e.g. "city,state" in a TSV) does not skew the count.
-  const delimiter = [",", "\t", ";"]
-    .map((d) => ({
-      d,
-      count: header
-        .split(d)
-        .map((token) => token.trim().replace(/^".*"$/, ""))
-        .filter((token) => token.length > 0).length,
-    }))
-    .sort((a, b) => b.count - a.count)[0].d;
-  return header
-    .split(delimiter)
-    .map((name) => name.trim().replace(/^"(.*)"$/, "$1").trim())
-    .filter((name) => name.length > 0);
+  // Reuse the project's quote-aware delimited-text parser for each candidate
+  // delimiter (comma, tab, semicolon) and keep the one that yields the most
+  // columns. Quoting is respected, so a quoted field containing the delimiter
+  // (e.g. "city,state") neither skews detection nor splits the header.
+  let best: string[] = [];
+  for (const delimiter of [",", "\t", ";"]) {
+    try {
+      const fields = parseDelimitedTextFields(header, delimiter).filter(
+        (name) => name.trim().length > 0,
+      );
+      if (fields.length > best.length) best = fields;
+    } catch {
+      // No header row for this delimiter; try the next candidate.
+    }
+  }
+  return best.map((name) => name.trim()).filter((name) => name.length > 0);
 }
 
 /**

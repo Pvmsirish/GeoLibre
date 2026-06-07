@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,11 @@ UV_INSTALL_BASE_URL = os.environ.get(
     "GEOLIBRE_UV_INSTALL_BASE_URL",
     "https://astral.sh/uv",
 ).rstrip("/")
+
+# The Whitebox and conversion routers each guard their own runtime setup with
+# their own lock, but both call _install_managed_uv; this shared lock prevents
+# two concurrent cold-start bootstraps from racing on the same uv binary.
+_UV_INSTALL_LOCK = threading.Lock()
 
 
 class RuntimeBootstrapError(RuntimeError):
@@ -129,12 +135,30 @@ def _download_to_temp(url: str, suffix: str) -> Path:
     return target
 
 
+def _is_valid_managed_uv(path: Path) -> bool:
+    """Return whether the managed uv binary is present and runnable."""
+    if not path.is_file():
+        return False
+    # Windows executability is extension-based; POSIX needs the execute bit.
+    return os.name == "nt" or os.access(path, os.X_OK)
+
+
 def _install_managed_uv() -> str:
     """Download and install uv into GeoLibre's managed runtime directory."""
     uv = _managed_uv_executable()
-    if uv.exists():
+    if _is_valid_managed_uv(uv):
         return str(uv)
 
+    with _UV_INSTALL_LOCK:
+        # Re-check inside the lock: another router may have installed uv while
+        # this caller was waiting.
+        if _is_valid_managed_uv(uv):
+            return str(uv)
+        return _install_managed_uv_locked(uv)
+
+
+def _install_managed_uv_locked(uv: Path) -> str:
+    """Download and install uv. The caller must hold ``_UV_INSTALL_LOCK``."""
     install_dir = _managed_uv_dir()
     install_dir.mkdir(parents=True, exist_ok=True)
     script_url = (
@@ -172,8 +196,10 @@ def _install_managed_uv() -> str:
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeBootstrapError(f"uv installer failed. {detail}")
-    if not uv.exists():
-        raise RuntimeBootstrapError(f"uv installer did not create {uv}")
+    if not _is_valid_managed_uv(uv):
+        raise RuntimeBootstrapError(
+            f"uv installer did not create a runnable binary at {uv}"
+        )
     return str(uv)
 
 
