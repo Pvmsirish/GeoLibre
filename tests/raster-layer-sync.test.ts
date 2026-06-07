@@ -13,6 +13,7 @@ import {
   runWithRasterStoreSyncSuspended,
   savedRasterState,
   syncRasterLayersToStore,
+  syncRasterLayersToStoreWithOptions,
   unwireRasterStoreSync,
   wireRasterStoreSync,
   type RasterSyncableControl,
@@ -49,10 +50,18 @@ function rasterInfo(patch: Partial<RasterLayerInfo> = {}): RasterLayerInfo {
   };
 }
 
-/** Recorder fake standing in for RasterControl in store->control tests. */
-function fakeControl(infos: RasterLayerInfo[] = []) {
+/**
+ * Recorder fake standing in for RasterControl in store->control tests.
+ * getState is a static snapshot of options.collapsed: tests exercising
+ * event-driven expand/collapse transitions need a stateful fake instead.
+ */
+function fakeControl(
+  infos: RasterLayerInfo[] = [],
+  options: { collapsed?: boolean } = {},
+) {
   const calls: { method: string; args: unknown[] }[] = [];
   const control: RasterSyncableControl = {
+    getState: () => ({ collapsed: options.collapsed ?? true }),
     getRasters: () => infos,
     removeRaster: (id) => calls.push({ method: "removeRaster", args: [id] }),
     setRasterState: (id, patch) =>
@@ -93,8 +102,11 @@ describe("createRasterStoreLayer", () => {
     assert.equal(layer.source.url, "https://example.com/dem.tif");
     assert.equal(layer.sourcePath, "https://example.com/dem.tif");
     assert.equal(layer.metadata.externalNativeLayer, true);
+    assert.equal(layer.metadata.externalDeckLayer, true);
     assert.equal(layer.metadata.customLayerType, "raster");
     assert.equal(layer.metadata.identifiable, false);
+    assert.equal(layer.metadata.panelCollapsed, true);
+    assert.equal(layer.metadata.rasterOverlayMode, "interleaved");
     assert.equal(layer.metadata.sourceKind, "maplibre-gl-raster");
     assert.deepEqual(layer.metadata.nativeLayerIds, ["raster-1"]);
     // fitLayer falls back to metadata.bounds for zoom-to-layer.
@@ -142,6 +154,22 @@ describe("createRasterStoreLayer", () => {
       stretch: "sqrt",
     });
   });
+
+  it("persists the raster panel collapsed state", () => {
+    const layer = createRasterStoreLayer(rasterInfo(), false);
+
+    assert.equal(layer.metadata.panelCollapsed, false);
+  });
+
+  it("marks overlaid deck rasters without MapLibre native layer ids", () => {
+    const layer = createRasterStoreLayer(rasterInfo(), true, {
+      interleaved: false,
+    });
+
+    assert.equal(layer.metadata.externalDeckLayer, true);
+    assert.equal(layer.metadata.rasterOverlayMode, "overlaid");
+    assert.deepEqual(layer.metadata.nativeLayerIds, []);
+  });
 });
 
 describe("syncRasterLayersToStore", () => {
@@ -163,6 +191,16 @@ describe("syncRasterLayersToStore", () => {
     assert.ok(layers.some((layer) => layer.id === "raster-1"));
     assert.ok(layers.some((layer) => layer.id === "raster-2"));
     assert.ok(layers.some((layer) => layer.id === "unrelated"));
+  });
+
+  it("can sync non-interleaved rasters without native layer ids", () => {
+    syncRasterLayersToStoreWithOptions(fakeControl([rasterInfo()]).control, {
+      interleaved: false,
+    });
+
+    const layer = useAppStore.getState().layers[0];
+    assert.equal(layer.metadata.rasterOverlayMode, "overlaid");
+    assert.deepEqual(layer.metadata.nativeLayerIds, []);
   });
 
   it("removes store layers whose rasters are gone", () => {
@@ -192,6 +230,58 @@ describe("syncRasterLayersToStore", () => {
     assert.equal(layer.name, "My DEM");
     assert.equal(layer.opacity, 0.4);
     assert.deepEqual(layer.metadata.bounds, [0, 0, 1, 1]);
+  });
+
+  it("refreshes the saved panel collapsed state", () => {
+    const { control } = fakeControl([rasterInfo()]);
+    syncRasterLayersToStore(control);
+    assert.equal(
+      useAppStore.getState().layers[0].metadata.panelCollapsed,
+      true,
+    );
+
+    syncRasterLayersToStore(
+      fakeControl([rasterInfo()], { collapsed: false }).control,
+    );
+
+    assert.equal(
+      useAppStore.getState().layers[0].metadata.panelCollapsed,
+      false,
+    );
+  });
+
+  it("flips panelCollapsed on store layers when an expand event syncs", () => {
+    // Stateful stand-in for the production expand/collapse wiring: the
+    // handler mirrors panelStateSyncHandler in maplibre-raster.ts, and
+    // expand() flips the state before notifying, matching the verified
+    // maplibre-gl-raster event ordering.
+    let collapsed = true;
+    const handlers: Array<() => void> = [];
+    const control: RasterSyncableControl = {
+      getState: () => ({ collapsed }),
+      getRasters: () => [rasterInfo()],
+      removeRaster: () => {},
+      setRasterState: () => {},
+      setVisible: () => {},
+    };
+    handlers.push(() => syncRasterLayersToStore(control));
+    const expand = () => {
+      collapsed = false;
+      for (const handler of handlers) handler();
+    };
+
+    syncRasterLayersToStore(control);
+    assert.equal(
+      useAppStore.getState().layers[0].metadata.panelCollapsed,
+      true,
+    );
+
+    expand();
+
+    assert.equal(
+      useAppStore.getState().layers[0].metadata.panelCollapsed,
+      false,
+    );
   });
 
   it("does not touch an existing layer when nothing changed", () => {

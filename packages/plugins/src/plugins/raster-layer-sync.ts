@@ -13,10 +13,15 @@ export const RASTER_SOURCE_KIND = "maplibre-gl-raster";
  * fakes without touching deck.gl or a real map.
  */
 export type RasterSyncableControl = {
+  getState?: () => { collapsed: boolean };
   getRasters: () => RasterLayerInfo[];
   removeRaster: (id: string) => void;
   setRasterState: (id: string, patch: Partial<RasterLayerState>) => void;
   setVisible: (id: string, visible: boolean) => void;
+};
+
+export type RasterSyncOptions = {
+  interleaved?: boolean;
 };
 
 let syncedControl: RasterSyncableControl | null = null;
@@ -54,9 +59,15 @@ export function isRasterControlStoreLayer(layer: GeoLibreLayer): boolean {
  * back through the control API.
  *
  * @param info - Public raster snapshot from RasterControl.getRasters().
+ * @param panelCollapsed - Whether the Add Raster Layer panel is collapsed.
  * @returns The corresponding GeoLibre store layer.
  */
-export function createRasterStoreLayer(info: RasterLayerInfo): GeoLibreLayer {
+export function createRasterStoreLayer(
+  info: RasterLayerInfo,
+  panelCollapsed = true,
+  options: RasterSyncOptions = {},
+): GeoLibreLayer {
+  const interleaved = options.interleaved ?? true;
   const url = info.source.kind === "url" ? info.source.url : undefined;
   const sourcePath =
     url ?? (info.source.kind === "file" ? info.source.fileName : info.id);
@@ -73,11 +84,16 @@ export function createRasterStoreLayer(info: RasterLayerInfo): GeoLibreLayer {
     style: { ...DEFAULT_LAYER_STYLE },
     metadata: {
       customLayerType: "raster",
+      externalDeckLayer: true,
       externalNativeLayer: true,
       identifiable: false,
       // In interleaved mode the deck.gl overlay inserts one custom style
       // layer per raster, keyed by the raster id, so ordering moves reach it.
-      nativeLayerIds: [info.id],
+      // The Tauri/WebKit fallback uses a separate deck.gl canvas, so there is
+      // no MapLibre style layer id to sync.
+      nativeLayerIds: interleaved ? [info.id] : [],
+      panelCollapsed,
+      rasterOverlayMode: interleaved ? "interleaved" : "overlaid",
       // The visualization state is persisted so restoreRasterLayers can
       // replay URL-backed rasters when a saved project is reopened.
       rasterSource: info.source.kind,
@@ -109,10 +125,18 @@ export function createRasterStoreLayer(info: RasterLayerInfo): GeoLibreLayer {
  * @param control - The raster control to mirror.
  */
 export function syncRasterLayersToStore(control: RasterSyncableControl): void {
+  syncRasterLayersToStoreWithOptions(control);
+}
+
+export function syncRasterLayersToStoreWithOptions(
+  control: RasterSyncableControl,
+  options: RasterSyncOptions = {},
+): void {
   if (isRasterStoreSyncSuspended()) return;
 
   const infos = control.getRasters();
   const infoIds = new Set(infos.map((info) => info.id));
+  const panelCollapsed = rasterPanelCollapsedFromControl(control);
 
   syncingLayersToStore = true;
   try {
@@ -124,7 +148,7 @@ export function syncRasterLayersToStore(control: RasterSyncableControl): void {
     }
 
     for (const info of infos) {
-      const layer = createRasterStoreLayer(info);
+      const layer = createRasterStoreLayer(info, panelCollapsed, options);
       const existing = useAppStore
         .getState()
         .layers.find((current) => current.id === layer.id);
@@ -350,6 +374,23 @@ export function savedRasterState(
   }
 
   return state;
+}
+
+function rasterPanelCollapsedFromControl(
+  control: RasterSyncableControl,
+): boolean {
+  try {
+    const collapsed = control.getState?.().collapsed;
+    return typeof collapsed === "boolean" ? collapsed : true;
+  } catch (error) {
+    // getState is optional, so only a throwing implementation lands here;
+    // surface it instead of letting it look like the method being absent.
+    console.warn(
+      "[GeoLibre] rasterPanelCollapsedFromControl: getState threw",
+      error,
+    );
+    return true;
+  }
 }
 
 // Key-order-insensitive deep equality for source/metadata records, matching
