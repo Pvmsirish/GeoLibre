@@ -191,6 +191,46 @@ def _clip(geojson, overlay, parameters) -> tuple[dict, list[str]]:
     return _to_feature_collection(clipped), [f"Clip: produced {len(clipped)} feature(s)"]
 
 
+# Spatial-join predicates exposed by the UI (a safe subset of the predicates
+# GeoPandas' spatial index accepts). The relationship reads left (input) → right
+# (join): "within" is input-within-join, "contains" is input-contains-join.
+_SJOIN_PREDICATES = {"intersects", "within", "contains"}
+_SJOIN_HOW = {"inner", "left"}
+
+
+def _spatial_join(geojson, overlay, parameters) -> tuple[dict, list[str]]:
+    gpd = _import_geopandas()
+    # Validate parameters before loading the layers so an unknown predicate/how
+    # surfaces its actionable message instead of a generic load error.
+    predicate = str(parameters.get("predicate", "intersects") or "intersects")
+    if predicate not in _SJOIN_PREDICATES:
+        raise ValueError(
+            f"Unknown predicate '{predicate}'. Accepted: {sorted(_SJOIN_PREDICATES)}"
+        )
+    how = str(parameters.get("how", "inner") or "inner")
+    if how not in _SJOIN_HOW:
+        raise ValueError(f"Unknown join type '{how}'. Accepted: {sorted(_SJOIN_HOW)}")
+    left = _load_gdf(geojson, "Input layer")
+    # An empty join layer is still well-defined and avoids a misleading "has no
+    # features" error: a left join keeps every input feature unchanged, an inner
+    # join yields nothing. Matches the client engine.
+    if not overlay or not overlay.get("features"):
+        result = left if how == "left" else left.iloc[0:0]
+        return (
+            _to_feature_collection(result),
+            [f"Spatial join: produced {len(result)} feature(s)"],
+        )
+    right = _load_gdf(overlay, "Join layer")
+    joined = gpd.sjoin(left, right, predicate=predicate, how=how)
+    # sjoin appends an "index_right" bookkeeping column; drop it so the output
+    # carries only the two layers' real attributes.
+    joined = joined.drop(columns=["index_right"], errors="ignore")
+    return (
+        _to_feature_collection(joined),
+        [f"Spatial join: produced {len(joined)} feature(s)"],
+    )
+
+
 def _union(geojson, overlay, parameters) -> tuple[dict, list[str]]:
     gpd = _import_geopandas()
     left = _load_gdf(geojson, "Input layer")
@@ -217,6 +257,7 @@ _DISPATCH: dict[str, Callable[..., tuple[dict, list[str]]]] = {
     "intersection": lambda g, o, p: _overlay_op(g, o, p, "intersection"),
     "difference": lambda g, o, p: _overlay_op(g, o, p, "difference"),
     "union": _union,
+    "spatial-join": _spatial_join,
 }
 
 

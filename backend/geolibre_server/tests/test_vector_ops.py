@@ -55,6 +55,18 @@ def _square(name: str, x: float = 0.0, y: float = 0.0) -> dict:
 
 SQUARE = _square("a")
 OVERLAP = _square("b", x=0.5, y=0.5)
+DISJOINT = _square("c", x=10.0, y=10.0)
+EMPTY = {"type": "FeatureCollection", "features": []}
+POINT_IN_SQUARE = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"name": "p"},
+            "geometry": {"type": "Point", "coordinates": [0.5, 0.5]},
+        }
+    ],
+}
 
 
 def test_unknown_tool_raises_value_error() -> None:
@@ -96,6 +108,88 @@ def test_overlay_tools(tool_id: str) -> None:
     geojson, _ = run_vector_tool(tool_id, SQUARE, OVERLAP)
     assert geojson["type"] == "FeatureCollection"
     assert len(geojson["features"]) >= 1
+
+
+@requires_geopandas
+def test_spatial_join_attaches_join_attributes() -> None:
+    geojson, messages = run_vector_tool(
+        "spatial-join",
+        SQUARE,
+        OVERLAP,
+        parameters={"predicate": "intersects", "how": "inner"},
+    )
+    assert geojson["type"] == "FeatureCollection"
+    assert len(geojson["features"]) == 1
+    props = geojson["features"][0]["properties"]
+    # Both layers carry a "name" column, so gpd.sjoin suffixes the collision.
+    assert props.get("name_left") == "a"
+    assert props.get("name_right") == "b"
+    assert "index_right" not in props
+    assert messages and "Spatial join" in messages[0]
+
+
+@requires_geopandas
+def test_spatial_join_left_keeps_unmatched_input() -> None:
+    geojson, _ = run_vector_tool(
+        "spatial-join", SQUARE, DISJOINT, parameters={"how": "left"}
+    )
+    assert len(geojson["features"]) == 1
+
+
+@requires_geopandas
+def test_spatial_join_inner_drops_unmatched_input() -> None:
+    geojson, _ = run_vector_tool(
+        "spatial-join", SQUARE, DISJOINT, parameters={"how": "inner"}
+    )
+    assert geojson["features"] == []
+
+
+@requires_geopandas
+def test_spatial_join_empty_join_layer_left_keeps_input() -> None:
+    geojson, _ = run_vector_tool("spatial-join", SQUARE, EMPTY, parameters={"how": "left"})
+    assert len(geojson["features"]) == 1
+
+
+@requires_geopandas
+def test_spatial_join_empty_join_layer_inner_is_empty() -> None:
+    geojson, _ = run_vector_tool(
+        "spatial-join", SQUARE, EMPTY, parameters={"how": "inner"}
+    )
+    assert geojson["features"] == []
+
+
+@requires_geopandas
+def test_spatial_join_within_predicate_matches() -> None:
+    # The point lies within the square, so a within-join (point -> square) matches.
+    geojson, _ = run_vector_tool(
+        "spatial-join", POINT_IN_SQUARE, SQUARE, parameters={"predicate": "within"}
+    )
+    assert len(geojson["features"]) == 1
+    assert geojson["features"][0]["properties"].get("name_right") == "a"
+
+
+@requires_geopandas
+def test_spatial_join_contains_predicate_matches() -> None:
+    # The square contains the point, so a contains-join (square -> point) matches.
+    geojson, _ = run_vector_tool(
+        "spatial-join", SQUARE, POINT_IN_SQUARE, parameters={"predicate": "contains"}
+    )
+    assert len(geojson["features"]) == 1
+    assert geojson["features"][0]["properties"].get("name_left") == "a"
+
+
+@requires_geopandas
+def test_spatial_join_invalid_predicate_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="predicate"):
+        run_vector_tool(
+            "spatial-join", SQUARE, OVERLAP, parameters={"predicate": "bogus"}
+        )
+
+
+@requires_geopandas
+def test_spatial_join_invalid_how_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="join type"):
+        run_vector_tool("spatial-join", SQUARE, OVERLAP, parameters={"how": "outer"})
 
 
 @requires_geopandas
