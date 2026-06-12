@@ -20,6 +20,9 @@ export interface ColumnSettings {
 
 export type ColumnMoveDirection = "left" | "right";
 
+/** Data type chosen when creating a new attribute field. */
+export type NewColumnType = "text" | "number" | "boolean";
+
 const COLUMN_SETTINGS_KEY = "columnSettings";
 
 // Style fields that hold a literal property name a destructive rename/delete
@@ -122,12 +125,12 @@ export function hiddenColumns(
   return orderColumns(discovered, settings).filter((key) => hidden.has(key));
 }
 
-// NOTE: renameFieldInGeojson/deleteFieldInGeojson rewrite every feature's
-// property object synchronously on the main thread. This is fine for typical
-// in-browser GeoJSON sizes but will visibly jank on very large layers (tens of
-// thousands of features); chunking or a worker would be needed if that becomes
-// a real workflow. Kept synchronous deliberately — these run on a user-initiated
-// one-off action, not in a hot path.
+// NOTE: renameFieldInGeojson/deleteFieldInGeojson/addFieldInGeojson rewrite every
+// feature's property object synchronously on the main thread. This is fine for
+// typical in-browser GeoJSON sizes but will visibly jank on very large layers
+// (tens of thousands of features); chunking or a worker would be needed if that
+// becomes a real workflow. Kept synchronous deliberately — these run on a
+// user-initiated one-off action, not in a hot path.
 function renameFieldInGeojson(
   geojson: FeatureCollection,
   oldKey: string,
@@ -161,6 +164,39 @@ function deleteFieldInGeojson(
       return { ...feature, properties: rest };
     }),
   };
+}
+
+function addFieldInGeojson(
+  geojson: FeatureCollection,
+  key: string,
+  value: unknown,
+): FeatureCollection {
+  return {
+    ...geojson,
+    features: geojson.features.map((feature) => ({
+      ...feature,
+      // Append the new key last so it is discovered (and thus rendered) at the
+      // end of the table. A feature with null properties gains a fresh object.
+      properties: { ...(feature.properties ?? {}), [key]: value },
+    })),
+  };
+}
+
+/**
+ * Coerce the raw default-value string into the value seeded into every feature.
+ * An empty string means "no default" → null, which mirrors how GIS tools leave
+ * a freshly added field unset. A non-null default also lets the inline cell
+ * editor infer the field's type (see parseAttributeDraft in AttributeTable).
+ */
+function defaultValueForType(type: NewColumnType, raw: string): unknown {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  if (type === "number") {
+    const next = Number(trimmed);
+    return Number.isFinite(next) ? next : null;
+  }
+  if (type === "boolean") return trimmed.toLowerCase() === "true";
+  return trimmed;
 }
 
 function renameFieldInStyle(
@@ -203,6 +239,47 @@ function removeKeyFromSettings(
   return {
     hidden: settings.hidden?.filter((entry) => entry !== key),
     order: settings.order?.filter((entry) => entry !== key),
+  };
+}
+
+/**
+ * Append a key to settings.order so a new column lands at the end of an explicit
+ * ordering. When no explicit order exists, return the settings untouched and let
+ * discovery order place the (last-added) key last on its own.
+ */
+function appendKeyToOrder(
+  settings: ColumnSettings,
+  key: string,
+): ColumnSettings {
+  if (!settings.order?.length) return settings;
+  return { ...settings, order: [...settings.order, key] };
+}
+
+/**
+ * Add a new attribute field, seeding every feature with a type-appropriate
+ * default value. Returns null (no-op) when the name is empty, collides with an
+ * existing column, when the layer has no in-store GeoJSON, or when it has no
+ * features. A field is only discoverable through feature property keys, so on a
+ * zero-row layer the column would never appear (and the collision guard would
+ * never trip, letting the same name be added repeatedly) — reject it instead.
+ */
+export function addColumn(
+  layer: GeoLibreLayer,
+  discovered: string[],
+  rawName: string,
+  type: NewColumnType,
+  rawDefault: string,
+): Partial<GeoLibreLayer> | null {
+  const name = rawName.trim();
+  if (!layer.geojson || layer.geojson.features.length === 0 || !name) {
+    return null;
+  }
+  if (discovered.includes(name)) return null; // would clobber another column
+  const value = defaultValueForType(type, rawDefault);
+  const settings = getColumnSettings(layer);
+  return {
+    geojson: addFieldInGeojson(layer.geojson, name, value),
+    metadata: metadataWithSettings(layer, appendKeyToOrder(settings, name)),
   };
 }
 
