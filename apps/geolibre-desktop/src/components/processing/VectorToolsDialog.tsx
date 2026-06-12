@@ -127,12 +127,6 @@ export function VectorToolsDialog({
     [],
   );
 
-  const setParam = useCallback(
-    (id: string, value: unknown) =>
-      setParams((prev) => ({ ...prev, [id]: value })),
-    [],
-  );
-
   const layerOptions = useCallback(
     (filter?: GeometryFamily[]) =>
       layers.filter((layer) => {
@@ -147,6 +141,70 @@ export function VectorToolsDialog({
         );
       }),
     [layers],
+  );
+
+  // Attribute-field names per layer, memoized on the layer set (and the dialog
+  // being open) so it doesn't recompute on every keystroke. GeoJSON is
+  // schemaless, so sample the first FIELD_SCAN_SAMPLE features rather than
+  // scanning a whole large layer on the React commit path.
+  const fieldsByLayer = useMemo(() => {
+    const FIELD_SCAN_SAMPLE = 1000;
+    const map = new Map<string, string[]>();
+    if (!open) return map;
+    for (const layer of layers) {
+      if (layer.type !== "geojson" || !layer.geojson) continue;
+      const keys = new Set<string>();
+      for (const feature of layer.geojson.features.slice(0, FIELD_SCAN_SAMPLE)) {
+        for (const key of Object.keys(feature.properties ?? {})) keys.add(key);
+      }
+      map.set(layer.id, [...keys]);
+    }
+    return map;
+  }, [layers, open]);
+
+  // Attribute-field options for a `type: "field"` parameter, read from the layer
+  // chosen in its `fieldSource` parameter (default "layer"). O(1) lookup.
+  const fieldOptions = useCallback(
+    (param: AlgorithmParameter): string[] => {
+      const sourceId = params[param.fieldSource ?? "layer"] as
+        | string
+        | undefined;
+      return (sourceId && fieldsByLayer.get(sourceId)) || [];
+    },
+    [fieldsByLayer, params],
+  );
+
+  // Update a parameter. When a layer parameter changes, also clear any
+  // `type: "field"` parameter that draws its options from it, so the field
+  // dropdown never keeps a value from the previous layer. Doing this at the
+  // mutation site (rather than in an effect) avoids re-running on every keystroke
+  // and means closing the dialog never wipes a valid selection.
+  const handleParamChange = useCallback(
+    (id: string, value: unknown) => {
+      setParams((prev) => {
+        const next = { ...prev, [id]: value };
+        for (const param of tool.parameters) {
+          if (param.type === "field" && (param.fieldSource ?? "layer") === id) {
+            next[param.id] = undefined;
+          }
+        }
+        return next;
+      });
+    },
+    [tool],
+  );
+
+  // Whether a parameter should be shown, given another parameter's value
+  // (e.g. hide the Value field for is-empty/is-not-empty operators).
+  const isParamVisible = useCallback(
+    (param: AlgorithmParameter): boolean => {
+      const vw = param.visibleWhen;
+      if (!vw) return true;
+      const current = params[vw.param] as string | undefined;
+      if ("in" in vw) return current != null && vw.in.includes(current);
+      return current == null || !vw.notIn.includes(current);
+    },
+    [params],
   );
 
   const addResultLayer = useCallback(
@@ -214,7 +272,7 @@ export function VectorToolsDialog({
     setLog([]);
     // Validate required parameters before doing any work.
     for (const param of tool.parameters) {
-      if (!param.required) continue;
+      if (!param.required || !isParamVisible(param)) continue;
       const value = params[param.id];
       if (
         value === undefined ||
@@ -269,6 +327,7 @@ export function VectorToolsDialog({
     addResultLayer,
     runRemoteEngine,
     mapControllerRef,
+    isParamVisible,
   ]);
 
   const groups = useMemo(groupedTools, []);
@@ -321,13 +380,16 @@ export function VectorToolsDialog({
             <p className="text-sm text-muted-foreground">{tool.description}</p>
 
             <div className="flex flex-col gap-3">
-              {tool.parameters.map((param) => (
+              {tool.parameters.filter(isParamVisible).map((param) => (
                 <ParameterField
                   key={param.id}
                   param={param}
                   value={params[param.id]}
                   layerOptions={layerOptions(param.geometryFilter)}
-                  onChange={(value) => setParam(param.id, value)}
+                  fieldOptions={
+                    param.type === "field" ? fieldOptions(param) : undefined
+                  }
+                  onChange={(value) => handleParamChange(param.id, value)}
                 />
               ))}
             </div>
@@ -408,6 +470,8 @@ interface ParameterFieldProps {
   param: AlgorithmParameter;
   value: unknown;
   layerOptions: { id: string; name: string }[];
+  /** Attribute-field names for a `type: "field"` parameter. */
+  fieldOptions?: string[];
   onChange: (value: unknown) => void;
 }
 
@@ -415,6 +479,7 @@ function ParameterField({
   param,
   value,
   layerOptions,
+  fieldOptions,
   onChange,
 }: ParameterFieldProps): ReactElement {
   const label = (
@@ -462,6 +527,31 @@ function ParameterField({
             </option>
           ))}
         </Select>
+      </div>
+    );
+  }
+
+  if (param.type === "field") {
+    return (
+      <div className="flex flex-col gap-1">
+        {label}
+        <Select
+          id={param.id}
+          value={(value as string) ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">
+            {fieldOptions?.length ? "Select a field..." : "Select a layer first"}
+          </option>
+          {fieldOptions?.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </Select>
+        {param.description ? (
+          <p className="text-xs text-muted-foreground">{param.description}</p>
+        ) : null}
       </div>
     );
   }

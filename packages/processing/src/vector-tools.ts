@@ -523,9 +523,26 @@ const SPATIAL_JOIN_PREDICATES: SpatialPredicate[] = [
 const SPATIAL_JOIN_HOW: SpatialJoinHow[] = ["inner", "left"];
 
 /**
- * Test an input feature against a join feature for the given predicate, mirroring
- * GeoPandas `sjoin(predicate=...)` semantics (the relationship reads left→right):
- * `within` is "input within join" and `contains` is "input contains join".
+ * Raw predicate test, mirroring GeoPandas `sjoin(predicate=...)` semantics (the
+ * relationship reads left→right): `within` is "input within join", `contains`
+ * is "input contains join". Throws on geometries Turf cannot evaluate (e.g. a
+ * GeometryCollection).
+ */
+function rawPredicate(
+  input: Feature,
+  join: Feature,
+  predicate: SpatialPredicate,
+): boolean {
+  if (predicate === "within") return booleanWithin(input, join);
+  if (predicate === "contains") return booleanContains(input, join);
+  return booleanIntersects(input, join);
+}
+
+/**
+ * Like {@link rawPredicate} but treats an unevaluable pair as a non-match rather
+ * than letting the exception abort the whole run. Safe for positive predicates
+ * (a pair that can't be evaluated simply doesn't match); the complement
+ * (`disjoint`) must instead distinguish "no match" from "couldn't evaluate".
  */
 function matchesPredicate(
   input: Feature,
@@ -533,13 +550,8 @@ function matchesPredicate(
   predicate: SpatialPredicate,
 ): boolean {
   try {
-    if (predicate === "within") return booleanWithin(input, join);
-    if (predicate === "contains") return booleanContains(input, join);
-    return booleanIntersects(input, join);
+    return rawPredicate(input, join, predicate);
   } catch {
-    // Turf's boolean predicates throw on unsupported geometries (e.g. a
-    // GeometryCollection). Treat such a pair as a non-match rather than letting
-    // the exception abort the whole join.
     return false;
   }
 }
@@ -669,6 +681,308 @@ export const spatialJoinTool: ProcessingAlgorithm = {
   },
 };
 
+/** Comparison operators for the Select by value tool; kept in sync with the backend. */
+const SELECT_VALUE_OPERATORS = new Set([
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "contains",
+  "starts-with",
+  "is-null",
+  "is-not-null",
+]);
+
+/** Stable JSON for arrays/objects (sorted keys) so both engines stringify alike. */
+function stableStringify(value: unknown): string {
+  // JSON.stringify(undefined) is the value `undefined`, which would join to "" in
+  // an array (e.g. "[1,,3]"); emit "null" to match Python's None ("[1,null,3]").
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const body = Object.keys(obj)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`)
+    .join(",");
+  return `{${body}}`;
+}
+
+/**
+ * Parse a string to a finite number accepting exactly the forms Python's
+ * `float()` does — decimal/scientific notation only (no hex/octal/binary),
+ * surrounding whitespace allowed — so the client and Python numeric coercion
+ * agree. (`Number("0x10")` is 16 and `parseFloat("0x10")` is 0, but
+ * `float("0x10")` raises, so neither built-in matches.) Returns NaN otherwise.
+ */
+function parseFiniteNumber(text: string): number {
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text.trim())) return NaN;
+  return Number(text);
+}
+
+/** Render a GeoJSON property value as a string, matching the backend's `_value_to_string`. */
+function valueToString(value: unknown): string {
+  if (typeof value === "boolean") return value ? "true" : "false";
+  // Arrays/objects: canonical JSON (sorted keys), matching json.dumps on the
+  // Python side, so eq/contains agree across engines for non-scalar values.
+  if (value !== null && typeof value === "object") return stableStringify(value);
+  return String(value);
+}
+
+/**
+ * Evaluate one feature's attribute value against an operator and the user's
+ * input string. Comparisons are numeric only when both sides are finite
+ * numbers, otherwise string-based. Empty values (null/undefined/NaN/empty
+ * string) match only the is-empty/is-not-empty operators (SQL-like). Mirrors
+ * `_match_value` in the Python backend so all three engines agree.
+ */
+function matchesValue(value: unknown, operator: string, raw: string): boolean {
+  const isEmpty =
+    value === null ||
+    value === undefined ||
+    (typeof value === "number" && Number.isNaN(value)) ||
+    valueToString(value) === "";
+  if (operator === "is-null") return isEmpty;
+  if (operator === "is-not-null") return !isEmpty;
+  if (isEmpty) return false;
+
+  const sv = valueToString(value);
+  if (operator === "contains") return sv.toLowerCase().includes(raw.toLowerCase());
+  if (operator === "starts-with")
+    return sv.toLowerCase().startsWith(raw.toLowerCase());
+
+  // Numeric comparison only when the value and the input both parse as numbers.
+  // Use parseFiniteNumber (not Number()) so we accept exactly what Python's
+  // float() does — decimal/scientific only, no hex/octal/binary — keeping the
+  // client and Python engines in agreement.
+  const vNum = typeof value === "number" ? value : parseFiniteNumber(sv);
+  const rNum = parseFiniteNumber(raw);
+  const numeric =
+    typeof value !== "boolean" &&
+    Number.isFinite(vNum) &&
+    Number.isFinite(rNum);
+  const a: number | string = numeric ? vNum : sv;
+  const b: number | string = numeric ? rNum : raw;
+  switch (operator) {
+    case "eq":
+      return a === b;
+    case "neq":
+      return a !== b;
+    case "gt":
+      return a > b;
+    case "gte":
+      return a >= b;
+    case "lt":
+      return a < b;
+    case "lte":
+      return a <= b;
+    default:
+      return false;
+  }
+}
+
+export const selectByValueTool: ProcessingAlgorithm = {
+  id: "select-by-value",
+  name: "Select by value",
+  description:
+    "Extract features whose attribute value matches a condition into a new layer",
+  group: "Select",
+  supportsSidecar: true,
+  parameters: [
+    { id: "layer", label: "Input layer", type: "layer", required: true },
+    {
+      id: "field",
+      label: "Field",
+      type: "field",
+      fieldSource: "layer",
+      required: true,
+    },
+    {
+      id: "operator",
+      label: "Operator",
+      type: "select",
+      default: "eq",
+      options: [
+        { value: "eq", label: "= (equals)" },
+        { value: "neq", label: "≠ (not equals)" },
+        { value: "gt", label: "> (greater than)" },
+        { value: "gte", label: "≥ (greater than or equal)" },
+        { value: "lt", label: "< (less than)" },
+        { value: "lte", label: "≤ (less than or equal)" },
+        { value: "contains", label: "contains (text)" },
+        { value: "starts-with", label: "starts with (text)" },
+        { value: "is-null", label: "is empty" },
+        { value: "is-not-null", label: "is not empty" },
+      ],
+    },
+    {
+      id: "value",
+      label: "Value",
+      type: "string",
+      required: true,
+      description: "Compared as a number when both sides are numeric.",
+      // Hidden (and so skipped by required validation) for the operators that
+      // ignore a value; required and form-validated for all the others.
+      visibleWhen: { param: "operator", notIn: ["is-null", "is-not-null"] },
+    },
+  ],
+  run: (ctx) => {
+    const fc = requireFeatures(ctx, "layer");
+    if (!fc) return;
+    const field = (ctx.parameters.field as string)?.trim();
+    if (!field) {
+      ctx.log("Error: a field is required");
+      return;
+    }
+    const operator = (ctx.parameters.operator as string) || "eq";
+    if (!SELECT_VALUE_OPERATORS.has(operator)) {
+      ctx.log(`Error: unknown operator '${operator}'`);
+      return;
+    }
+    const raw = (ctx.parameters.value as string) ?? "";
+    const needsValue = operator !== "is-null" && operator !== "is-not-null";
+    if (needsValue && raw === "") {
+      ctx.log("Error: a value is required for this operator");
+      return;
+    }
+    // A field absent from every feature is treated as all-empty (schemaless
+    // GeoJSON), so is-empty matches everything and the rest match nothing —
+    // rather than erroring. matchesValue handles the missing value per feature.
+    const selected = fc.features.filter((f) =>
+      matchesValue(f.properties?.[field], operator, raw),
+    );
+    ctx.log(
+      `Select by value: ${selected.length} of ${fc.features.length} feature(s) matched`,
+    );
+    ctx.addResultLayer?.("Select by value", featureCollection(selected));
+  },
+};
+
+/** Select by location adds "disjoint" (the complement of intersects). */
+type SelectLocationPredicate = SpatialPredicate | "disjoint";
+
+/** Spatial predicates for Select by location; kept in sync with the backend. */
+const SELECT_LOCATION_PREDICATES = new Set<SelectLocationPredicate>([
+  "intersects",
+  "within",
+  "contains",
+  "disjoint",
+]);
+
+export const selectByLocationTool: ProcessingAlgorithm = {
+  id: "select-by-location",
+  name: "Select by location",
+  description:
+    "Extract features by their spatial relationship to a second layer into a new layer",
+  group: "Select",
+  supportsSidecar: true,
+  parameters: [
+    { id: "layer", label: "Input layer", type: "layer", required: true },
+    { id: "overlay", label: "Filter layer", type: "layer", required: true },
+    {
+      id: "predicate",
+      label: "Spatial relationship",
+      type: "select",
+      default: "intersects",
+      options: [
+        { value: "intersects", label: "Intersects" },
+        { value: "within", label: "Within" },
+        { value: "contains", label: "Contains" },
+        { value: "disjoint", label: "Disjoint (no intersection)" },
+      ],
+    },
+  ],
+  run: (ctx) => {
+    const input = requireFeatures(ctx, "layer");
+    if (!input) return;
+    const filterLayer = getLayer(ctx, "overlay");
+    if (!filterLayer) {
+      ctx.log('Error: parameter "overlay" has no layer selected');
+      return;
+    }
+    // A non-vector layer (raster/tile) has no `geojson`; that's distinct from an
+    // empty-but-valid filter layer, so reject it rather than silently treating
+    // it as an empty filter (which would select everything for disjoint).
+    if (!filterLayer.geojson) {
+      ctx.log("Error: the filter layer has no vector data");
+      return;
+    }
+    const predicateInput = (ctx.parameters.predicate as string) || "intersects";
+    if (
+      !SELECT_LOCATION_PREDICATES.has(predicateInput as SelectLocationPredicate)
+    ) {
+      ctx.log(`Error: unknown predicate '${predicateInput}'`);
+      return;
+    }
+    const predicate = predicateInput as SelectLocationPredicate;
+    const inputFeatures = input.features.filter((f) => f.geometry);
+    const filterFeatures = filterLayer.geojson.features.filter((f) => f.geometry);
+    if (!inputFeatures.length) {
+      ctx.log("Error: input layer has no features with geometry");
+      return;
+    }
+    // This pairwise test runs on the main thread; cap it so very large layers
+    // cannot freeze the browser tab. Use the Sidecar engine for bigger jobs.
+    const pairs = inputFeatures.length * filterFeatures.length;
+    if (pairs > MAX_CLIENT_PAIRS) {
+      ctx.log(
+        `Error: select by location needs ${pairs} comparisons (limit ${MAX_CLIENT_PAIRS}); use the Sidecar engine for large layers`,
+      );
+      return;
+    }
+    // "disjoint" selects features that intersect nothing; the others select
+    // features matching the predicate against any filter feature. With an empty
+    // filter layer nothing matches, so disjoint keeps everything and the rest
+    // keep nothing — matching the backend.
+    // In the else branch TS narrows `predicate` to SpatialPredicate, so this is
+    // checked — no cast — and would error if the "disjoint" guard were removed.
+    const test: SpatialPredicate =
+      predicate === "disjoint" ? "intersects" : predicate;
+    // For disjoint, a feature dropped only because a pair was unevaluable is not
+    // a confident result; count those to warn the user (the sidecar, via
+    // GeoPandas, can evaluate geometries Turf cannot, e.g. GeometryCollections).
+    let unevaluableDropped = 0;
+    const selected = inputFeatures.filter((f) => {
+      let matchesAny = false;
+      let unevaluable = false;
+      for (const g of filterFeatures) {
+        try {
+          if (rawPredicate(f, g, test)) {
+            matchesAny = true;
+            break;
+          }
+        } catch {
+          // Turf can't evaluate this pair (e.g. a GeometryCollection).
+          unevaluable = true;
+        }
+      }
+      // For positive predicates an unevaluable pair is just a non-match. For the
+      // complement (disjoint) we must NOT claim "no intersection" when a pair
+      // couldn't be checked, so require every pair to have been evaluable.
+      if (predicate === "disjoint") {
+        if (!matchesAny && unevaluable) unevaluableDropped += 1;
+        return !matchesAny && !unevaluable;
+      }
+      return matchesAny;
+    });
+    // Report the total the user sees in the layer list; note any geometry-less
+    // features that were skipped (the sidecar drops them too).
+    const skipped = input.features.length - inputFeatures.length;
+    ctx.log(
+      `Select by location: ${selected.length} of ${input.features.length} feature(s) matched` +
+        (skipped > 0 ? ` (${skipped} skipped, no geometry)` : ""),
+    );
+    if (unevaluableDropped > 0) {
+      ctx.log(
+        `Note: ${unevaluableDropped} feature(s) excluded from disjoint because Turf could not evaluate their geometry; use the Sidecar engine for full support`,
+      );
+    }
+    ctx.addResultLayer?.("Select by location", featureCollection(selected));
+  },
+};
+
 export const VECTOR_TOOLS: ProcessingAlgorithm[] = [
   bufferTool,
   centroidsTool,
@@ -681,6 +995,8 @@ export const VECTOR_TOOLS: ProcessingAlgorithm[] = [
   differenceTool,
   unionTool,
   spatialJoinTool,
+  selectByValueTool,
+  selectByLocationTool,
 ];
 
 export function getVectorTool(id: string): ProcessingAlgorithm | undefined {
