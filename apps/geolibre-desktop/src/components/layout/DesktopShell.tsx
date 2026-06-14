@@ -41,6 +41,8 @@ import {
   loadDroppedVectorPaths,
   type DroppedRaster,
 } from "../../lib/tauri-io";
+import type { LargeVectorDataset } from "../../lib/duckdb-vector-guard";
+import i18n from "../../i18n";
 import {
   addOsmPbfLayers,
   isOsmPbfFileName,
@@ -75,6 +77,21 @@ import { TopToolbar } from "./TopToolbar";
 import type { LayoutOptions } from "../../hooks/useLayoutOptions";
 import type { ThemeMode } from "../../hooks/useThemeMode";
 import type { ProjectUrlLoadState } from "../../hooks/useProjectUrlLoader";
+
+/**
+ * Confirm loading a vector source whose feature count tripped the loader's
+ * large-dataset guard. Mirrors the OSM PBF drop guard's blocking
+ * `window.confirm` (see the handlers below): a `false` return aborts that one
+ * file's load without affecting the rest of a multi-file drop.
+ */
+function confirmLargeVectorDataset({ name, featureCount }: LargeVectorDataset) {
+  return window.confirm(
+    i18n.t("toolbar.item.largeVectorDesc", {
+      name,
+      count: featureCount.toLocaleString(),
+    }),
+  );
+}
 
 const ProcessingDialog = lazy(() =>
   import("../processing/ProcessingDialog")
@@ -668,7 +685,9 @@ export function DesktopShell({
               const rasterCount = await addDroppedRasters(
                 await loadDroppedRasterPaths(otherPaths),
               );
-              const importedLayers = await loadDroppedVectorPaths(otherPaths);
+              const importedLayers = await loadDroppedVectorPaths(otherPaths, {
+                onLargeDataset: confirmLargeVectorDataset,
+              });
               // See the browser handler: skip finishDrop's empty-input error
               // when PBF files were present (even if rejected/failed).
               if (
@@ -795,7 +814,9 @@ export function DesktopShell({
           const rasterCount = await addDroppedRasters(
             loadDroppedRasterFiles(otherFiles),
           );
-          const importedLayers = await loadDroppedVectorFiles(otherFiles);
+          const importedLayers = await loadDroppedVectorFiles(otherFiles, {
+            onLargeDataset: confirmLargeVectorDataset,
+          });
           // Call finishDrop (which reports success or throws the empty-input
           // error) only when the other files produced something, or when the
           // drop contained no PBF files at all. If PBF files were present —
