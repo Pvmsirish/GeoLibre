@@ -14,7 +14,9 @@ import type { Database, SqlJsStatic } from "sql.js";
  *   "thread constructor failed: Resource temporarily unavailable"
  *
  * Injecting `gpkg_ogr_contents` with a cached count keeps GDAL on the fast,
- * single-threaded path. See GitHub issue #258.
+ * single-threaded path. The same crash happens when the row exists but its
+ * `feature_count` is NULL/stale (GDAL recomputes it), so we repair those too.
+ * See GitHub issues #258 and #376.
  */
 
 const SQLITE_MAGIC = "SQLite format 3\0";
@@ -59,33 +61,68 @@ export function ensureGpkgFeatureCountSync(
     // Only touch real GeoPackages; gpkg_contents is mandatory in the spec.
     if (!tableExists(db, "gpkg_contents")) return bytes;
 
-    const featureTablesResult = db.exec(
-      // lower() so out-of-spec producers writing 'Features'/'FEATURES' still match.
+    // The set of feature (vector) tables is the union of two authoritative
+    // sources: gpkg_contents rows typed 'features', and every table listed in
+    // gpkg_geometry_columns. Out-of-spec producers sometimes mistype or omit
+    // the gpkg_contents row while still registering the geometry column, so
+    // relying on gpkg_contents alone misses those tables. lower() so producers
+    // writing 'Features'/'FEATURES' still match.
+    // SQLite identifiers are case-insensitive, but the metadata tables can
+    // disagree on casing (e.g. gpkg_contents says 'Places' while
+    // gpkg_ogr_contents says 'places'). Key everything by the lowercased name so
+    // those resolve to one table — comparing case-sensitively would otherwise
+    // report a false "missing" table and INSERT a duplicate ogr_contents row.
+    const featureTables = new Map<string, string>(); // lowercase key → canonical name
+    for (const sql of [
       "SELECT table_name FROM gpkg_contents WHERE lower(data_type)='features'",
-    );
-    if (
-      featureTablesResult.length === 0 ||
-      featureTablesResult[0].values.length === 0
-    ) {
-      return bytes;
+      ...(tableExists(db, "gpkg_geometry_columns")
+        ? ["SELECT table_name FROM gpkg_geometry_columns"]
+        : []),
+    ]) {
+      for (const row of db.exec(sql)[0]?.values ?? []) {
+        // First-seen wins: gpkg_contents is queried first, so its (spec-primary)
+        // spelling is kept as the canonical name even when gpkg_geometry_columns
+        // lists the same table with different casing.
+        const name = row[0];
+        if (typeof name === "string" && !featureTables.has(name.toLowerCase())) {
+          featureTables.set(name.toLowerCase(), name);
+        }
+      }
     }
-    const featureTables = featureTablesResult[0].values
-      .map((row) => row[0])
-      .filter((name): name is string => typeof name === "string");
+    if (featureTables.size === 0) return bytes;
 
     const hasOgrContents = tableExists(db, "gpkg_ogr_contents");
-    const existingCounts = hasOgrContents
-      ? new Set(
-          (
-            db.exec("SELECT table_name FROM gpkg_ogr_contents")[0]?.values ?? []
-          )
-            .map((row) => row[0])
-            .filter((name): name is string => typeof name === "string"),
-        )
-      : new Set<string>();
+    // A table is only "safe" when its cached count is a real integer. A row
+    // whose feature_count is NULL (or any non-integer) is NOT safe: GDAL treats
+    // it as unknown and recomputes the count on read, which is the multithreaded
+    // path that aborts with "thread constructor failed: Resource temporarily
+    // unavailable" on the single-threaded WASM build. Many writers create the
+    // gpkg_ogr_contents row but leave feature_count NULL, so checking only for
+    // the row's presence (the previous behaviour) let those files through. See
+    // issues #258 and #376.
+    const tablesWithValidCount = new Set<string>(); // lowercase keys
+    const tablesWithRow = new Set<string>(); // lowercase keys
+    if (hasOgrContents) {
+      for (const row of db.exec(
+        "SELECT table_name, typeof(feature_count), feature_count FROM gpkg_ogr_contents",
+      )[0]?.values ?? []) {
+        const name = row[0];
+        if (typeof name !== "string") continue;
+        const key = name.toLowerCase();
+        tablesWithRow.add(key);
+        // A valid cached count is a non-negative integer. GDAL uses -1 as a
+        // "dirty/invalid" sentinel and recomputes the count for it (the
+        // multithreaded path that crashes WASM), so a negative value is not safe.
+        if (row[1] === "integer" && (row[2] as number) >= 0) {
+          tablesWithValidCount.add(key);
+        }
+      }
+    }
 
-    const missing = featureTables.filter((name) => !existingCounts.has(name));
-    if (missing.length === 0) return bytes;
+    const needsCount = [...featureTables.keys()].filter(
+      (key) => !tablesWithValidCount.has(key),
+    );
+    if (needsCount.length === 0) return bytes;
 
     if (!hasOgrContents) {
       db.run(
@@ -95,15 +132,38 @@ export function ensureGpkgFeatureCountSync(
       );
     }
 
-    for (const tableName of missing) {
-      const countResult = db.exec(
-        `SELECT count(*) FROM ${quoteIdentifier(tableName)}`,
-      );
-      const count = countResult[0]?.values[0]?.[0] ?? 0;
-      db.run(
-        "INSERT INTO gpkg_ogr_contents (table_name, feature_count) VALUES (:name, :count)",
-        { ":name": tableName, ":count": count },
-      );
+    for (const key of needsCount) {
+      const tableName = featureTables.get(key)!;
+      // Best-effort per table: a malformed GeoPackage can register a view, a
+      // deleted table, or a virtual table that count(*) cannot read. Skipping it
+      // keeps the other feature tables repairable instead of aborting the whole
+      // file (which would leave every table unpatched).
+      try {
+        const countResult = db.exec(
+          `SELECT count(*) FROM ${quoteIdentifier(tableName)}`,
+        );
+        const count = countResult[0]?.values[0]?.[0] ?? 0;
+        if (tablesWithRow.has(key)) {
+          // Repair a stale/NULL count rather than INSERT (which would collide
+          // with the existing primary-key row).
+          db.run(
+            "UPDATE gpkg_ogr_contents SET feature_count = :count WHERE lower(table_name) = :name",
+            { ":name": key, ":count": count },
+          );
+        } else {
+          db.run(
+            "INSERT INTO gpkg_ogr_contents (table_name, feature_count) VALUES (:name, :count)",
+            { ":name": tableName, ":count": count },
+          );
+        }
+      } catch (error) {
+        // Leave this table to GDAL's normal error path; other tables still get
+        // fixed. Warn so a malformed GeoPackage is diagnosable rather than silent.
+        console.warn(
+          `[GeoLibre] Could not repair gpkg_ogr_contents for table "${tableName}":`,
+          error,
+        );
+      }
     }
 
     // sql.js always exports an ArrayBuffer-backed Uint8Array; re-narrow the type.
