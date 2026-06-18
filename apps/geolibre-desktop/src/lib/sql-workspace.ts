@@ -13,6 +13,7 @@ import {
   quoteSqlString,
   rowsFromResult,
 } from "./duckdb-vector-loader";
+import { GDAL_AUTO_FID_COLUMN, stripAutoFidColumn } from "./duckdb-geometry";
 
 // Hidden column appended to the user's query so geometry can be returned as
 // GeoJSON for the "Add as layer" / export paths without disturbing the columns
@@ -253,8 +254,15 @@ export async function registerLayerTables(
   const registered: SqlWorkspaceTable[] = [];
 
   for (const { layer, tableName } of assignTableNames(layers)) {
+    // assignTableNames already filters out layers without geojson; this guard
+    // narrows the optional `layer.geojson` to FeatureCollection for the call
+    // below (TypeScript does not carry the filter's narrowing across functions).
+    if (!layer.geojson) continue;
     const fileName = `${filePrefix}__${tableName}.geojson`;
-    await db.registerFileText(fileName, JSON.stringify(layer.geojson));
+    await db.registerFileText(
+      fileName,
+      JSON.stringify(stripAutoFidColumn(layer.geojson)),
+    );
     // Track immediately after registration so a failure in the CREATE TABLE
     // below still leaves this file in the cleanup list.
     registeredFiles?.push(fileName);
@@ -588,6 +596,13 @@ export function rowsToFeatureCollection(
     const properties: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(row)) {
       if (key === GEOMETRY_JSON_COLUMN || key === geometryColumn) continue;
+      // Drop GDAL's synthetic FID so a SQL-result layer never carries the
+      // OGC_FID artefact into its attributes/exports — and so re-reading it
+      // can't trigger the duplicate-column Binder Error (issue #499).
+      // stripAutoFidColumn remains the belt-and-braces guard at registration
+      // time for layers that arrive via other paths (drag-drop, project
+      // restore, plugins) and already carry OGC_FID.
+      if (key === GDAL_AUTO_FID_COLUMN) continue;
       if (value instanceof Uint8Array) continue;
       properties[key] = normalizeValue(value);
     }
