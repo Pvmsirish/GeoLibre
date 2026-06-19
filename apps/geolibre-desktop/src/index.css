@@ -1520,16 +1520,32 @@ body,
   width: 24px;
 }
 
+.geolibre-reset-bearing-needle-label {
+  fill: #1e293b;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  /* The label is a real SVG text node: stop it from being text-selected on a
+     click-drag and from firing the native text context menu on right-click. */
+  pointer-events: none;
+  transition: fill 150ms ease;
+  user-select: none;
+}
+
 .geolibre-reset-bearing-needle-north {
-  fill: #334155;
+  fill: #1e293b;
   transition: fill 150ms ease;
 }
 
+/* Light, slim south tail so the upward north needle stays the single dominant
+   pointer (issue #537) — the two halves must not read as equal triangles. */
 .geolibre-reset-bearing-needle-south {
-  fill: #64748b;
+  fill: #cbd5e1;
 }
 
-.geolibre-reset-bearing-button--active .geolibre-reset-bearing-needle-north {
+.geolibre-reset-bearing-button--active .geolibre-reset-bearing-needle-north,
+.geolibre-reset-bearing-button--active .geolibre-reset-bearing-needle-label {
   fill: hsl(var(--destructive));
 }
 
