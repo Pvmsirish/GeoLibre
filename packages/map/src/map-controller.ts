@@ -452,12 +452,17 @@ export class MapController {
    * @param location Target camera (center, zoom, pitch, bearing).
    */
   flyToView(location: StoryChapterLocation): void {
-    this.map?.flyTo({
-      center: location.center,
-      zoom: location.zoom,
-      pitch: location.pitch,
-      bearing: location.bearing,
-    });
+    this.map?.flyTo(
+      {
+        center: location.center,
+        zoom: location.zoom,
+        pitch: location.pitch,
+        bearing: location.bearing,
+      },
+      // Tag as a story camera move (like applyStoryChapterCamera) so viewport
+      // history skips this scripted preview rather than recording it.
+      { storyCameraToken: this.storyCameraToken },
+    );
   }
 
   private isStyleReady(): boolean {
@@ -569,6 +574,15 @@ export class MapController {
   applyView(view: MapViewState): void {
     if (!this.map) return;
     this.map.jumpTo(constrainMapView(view, this.mapPreferences, this.map));
+  }
+
+  /**
+   * Like {@link applyView} but animates the camera (MapLibre `easeTo`) instead
+   * of jumping, for browser-style back/forward viewport navigation.
+   */
+  easeToView(view: MapViewState): void {
+    if (!this.map) return;
+    this.map.easeTo(constrainMapView(view, this.mapPreferences, this.map));
   }
 
   applyMapPreferences(preferences: MapPreferences): void {
@@ -839,6 +853,32 @@ export class MapController {
       ...(typeof camera.pitch === "number" ? { pitch: camera.pitch } : {}),
       duration: typeof camera.duration === "number" ? camera.duration : 800,
     });
+  }
+
+  /** Animate the map in by one zoom level, mirroring the navigation control. */
+  zoomIn(): void {
+    this.map?.zoomIn();
+  }
+
+  /** Animate the map out by one zoom level, mirroring the navigation control. */
+  zoomOut(): void {
+    this.map?.zoomOut();
+  }
+
+  /**
+   * Animate the map back to north-up (bearing 0), leaving the center, zoom, and
+   * pitch untouched. Mirrors MapLibre's compass-control click.
+   */
+  resetNorth(): void {
+    this.map?.resetNorth();
+  }
+
+  /**
+   * Animate the map back to north-up and flat (bearing 0 and pitch 0), leaving
+   * the center and zoom untouched.
+   */
+  resetNorthPitch(): void {
+    this.map?.resetNorthPitch();
   }
 
   /**

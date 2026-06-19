@@ -143,6 +143,7 @@ export const PLUGIN_TIERS: Record<string, ComplexityTier> = {
 export type TopLevelMenuId =
   | "project"
   | "edit"
+  | "view"
   | "addData"
   | "processing"
   | "controls"
@@ -159,6 +160,7 @@ export interface TopLevelMenuEntry {
 export const TOP_LEVEL_MENUS: readonly TopLevelMenuEntry[] = [
   { id: "project", labelKey: "toolbar.menu.project", tier: "basic" },
   { id: "edit", labelKey: "toolbar.menu.edit", tier: "basic" },
+  { id: "view", labelKey: "toolbar.menu.view", tier: "basic" },
   { id: "addData", labelKey: "toolbar.menu.addData", tier: "basic" },
   // Processing exposes analysis tools aimed at intermediate+ users; hide the
   // whole menu for beginners.
@@ -205,6 +207,14 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
   // Edit
   { id: "edit.undo", menuId: "edit", labelKey: "toolbar.item.undo", tier: "basic" },
   { id: "edit.redo", menuId: "edit", labelKey: "toolbar.item.redo", tier: "basic" },
+  // View
+  { id: "view.zoomIn", menuId: "view", labelKey: "toolbar.item.zoomIn", tier: "basic" },
+  { id: "view.zoomOut", menuId: "view", labelKey: "toolbar.item.zoomOut", tier: "basic" },
+  { id: "view.previousView", menuId: "view", labelKey: "toolbar.item.previousView", tier: "basic" },
+  { id: "view.nextView", menuId: "view", labelKey: "toolbar.item.nextView", tier: "basic" },
+  { id: "view.resetNorth", menuId: "view", labelKey: "toolbar.item.resetNorth", tier: "basic" },
+  { id: "view.resetPitchBearing", menuId: "view", labelKey: "toolbar.item.resetPitchBearing", tier: "basic" },
+  { id: "view.setView", menuId: "view", labelKey: "toolbar.item.setView", tier: "intermediate" },
   // Processing
   { id: "processing.assistant", menuId: "processing", labelKey: "toolbar.command.assistant", tier: "intermediate" },
   { id: "processing.whitebox", menuId: "processing", labelKey: "toolbar.item.whitebox", tier: "advanced" },
@@ -235,7 +245,9 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
   { id: "controls.mapControl.attribution", menuId: "controls", labelKey: "toolbar.mapControl.attribution", tier: "basic" },
   { id: "controls.mapControl.logo", menuId: "controls", labelKey: "toolbar.mapControl.logo", tier: "advanced" },
   // Controls — overlays and panels
-  { id: "controls.atmosphereEffects", menuId: "controls", labelKey: "toolbar.item.atmosphereEffects", tier: "advanced" },
+  // Basic so Beginners keep the toggle: Atmospheric Effects is activeByDefault,
+  // so hiding it would leave the effect on with no way to turn it off.
+  { id: "controls.atmosphereEffects", menuId: "controls", labelKey: "toolbar.item.atmosphereEffects", tier: "basic" },
   { id: "controls.directions", menuId: "controls", labelKey: "toolbar.item.directions", tier: "intermediate" },
   { id: "controls.reverseGeocode", menuId: "controls", labelKey: "toolbar.item.reverseGeocode", tier: "intermediate" },
   { id: "controls.search", menuId: "controls", labelKey: "toolbar.item.search", tier: "basic" },
@@ -270,6 +282,7 @@ export const MENU_ITEM_GROUPS: ReadonlyArray<{
 }> = [
   { menuId: "project", labelKey: "toolbar.menu.project" },
   { menuId: "edit", labelKey: "toolbar.menu.edit" },
+  { menuId: "view", labelKey: "toolbar.menu.view" },
   { menuId: "processing", labelKey: "toolbar.menu.processing" },
   { menuId: "controls", labelKey: "toolbar.menu.controls" },
   { menuId: "settings", labelKey: "settings.title" },
