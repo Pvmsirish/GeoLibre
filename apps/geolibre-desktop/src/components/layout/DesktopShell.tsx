@@ -362,6 +362,33 @@ export function DesktopShell({
   useEffect(() => {
     setBookmarkCaptureLabel(t("bookmark.captureStateLabel"));
   }, [t]);
+  // The map's Fullscreen control maximizes the map *canvas* (it calls
+  // requestFullscreen on the map container). Chromium promotes that element to
+  // the browser top layer, so the toolbar and side panels are hidden for free.
+  // WebKit (the Tauri desktop webview) does not: it grows the map container to
+  // fill the window but leaves the surrounding chrome painted around and on top
+  // of it (opengeos/GeoLibre#611). Mirror the fullscreen state onto the shell as
+  // `data-map-fullscreen` so CSS can hide that chrome on every engine, leaving a
+  // clean map-only view. document.fullscreenElement is set even on WebKit.
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    const sync = () => {
+      const fsEl =
+        document.fullscreenElement ??
+        (document as Document & { webkitFullscreenElement?: Element | null })
+          .webkitFullscreenElement ??
+        null;
+      shell.toggleAttribute("data-map-fullscreen", !!fsEl && shell.contains(fsEl));
+    };
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+    sync();
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, []);
   // Teardown for an in-progress panel resize, so a pointercancel or an unmount
   // mid-drag still detaches the global listeners and restores document.body.
   const activeResizeCleanupRef = useRef<(() => void) | null>(null);
@@ -1248,7 +1275,10 @@ export function DesktopShell({
           />
         </SectionErrorBoundary>
       ) : null}
-      <div className="relative flex min-h-0 flex-1 flex-col md:flex-row">
+      <div
+        data-workspace-row=""
+        className="relative flex min-h-0 flex-1 flex-col md:flex-row"
+      >
         {layoutOptions.layerPanelVisible ? (
           <SectionErrorBoundary label="Layer panel">
             <LayerPanel

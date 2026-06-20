@@ -1604,6 +1604,13 @@ export class MapController {
     ) {
       return false;
     }
+    // Fullscreen the map container so only the map canvas (and its floating
+    // controls) fills the screen. MapLibre defaults to `map.getContainer()`,
+    // which is what we want here. The surrounding workspace chrome (toolbar and
+    // side panels) is hidden by the app while fullscreen is active: Chromium
+    // promotes the fullscreen element to the top layer so the chrome is hidden
+    // automatically, but WebKit (the Tauri desktop webview) leaves it painted
+    // around the map, so the app hides it via CSS. See opengeos/GeoLibre#611.
     this.fullscreenControl = new maplibregl.FullscreenControl();
     this.map.addControl(
       this.fullscreenControl,
