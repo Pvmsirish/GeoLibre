@@ -728,8 +728,10 @@ export function DesktopShell({
     (importedLayers: ImportedVectorLayer[]) => {
       let lastLayerId: string | null = null;
       for (const layer of importedLayers) {
+        // `||` (not `??`) so an empty-string name falls back to the path, and
+        // matches the name shown in the drop confirmation toast.
         lastLayerId = addGeoJsonLayer(
-          layer.name ?? layerNameFromPath(layer.path),
+          layer.name || layerNameFromPath(layer.path),
           layer.data,
           layer.path,
         );
@@ -761,20 +763,42 @@ export function DesktopShell({
         throw new Error("Drop a supported vector or raster file.");
       }
       if (importedLayers.length) addImportedVectorLayers(importedLayers);
-      const parts: string[] = [];
-      if (importedLayers.length) {
-        parts.push(
-          `${importedLayers.length} vector layer${
-            importedLayers.length === 1 ? "" : "s"
-          }`,
+      // Name the layer when a single vector file was dropped (the common case)
+      // so the confirmation echoes what the user just added, instead of a bare
+      // count that can read like "nothing happened" while the source panel
+      // stays open (opengeos/GeoLibre#666).
+      if (importedLayers.length === 1 && !rasterCount) {
+        const only = importedLayers[0];
+        // `||` (not `??`) so an empty-string name also falls back to the path.
+        setDropMessage(
+          t("toolbar.fileDrop.addedLayer", {
+            name: only.name || layerNameFromPath(only.path),
+          }),
         );
+        return;
       }
-      if (rasterCount) {
-        parts.push(`${rasterCount} raster layer${rasterCount === 1 ? "" : "s"}`);
-      }
-      setDropMessage(`Added ${parts.join(" and ")}.`);
+      // Full-sentence keys (rather than a JS-assembled summary) keep word
+      // order and the connector inside the translation catalog. The mixed
+      // case composes two independently pluralized noun phrases into its
+      // sentence, since one i18next key can pluralize only a single count.
+      setDropMessage(
+        importedLayers.length && rasterCount
+          ? t("toolbar.fileDrop.addedBoth", {
+              vector: t("toolbar.fileDrop.bothVectorLayers", {
+                count: importedLayers.length,
+              }),
+              raster: t("toolbar.fileDrop.bothRasterLayers", {
+                count: rasterCount,
+              }),
+            })
+          : importedLayers.length
+            ? t("toolbar.fileDrop.addedVectorLayers", {
+                count: importedLayers.length,
+              })
+            : t("toolbar.fileDrop.addedRasterLayers", { count: rasterCount }),
+      );
     },
-    [addImportedVectorLayers],
+    [addImportedVectorLayers, t],
   );
 
   useEffect(() => {
@@ -1445,8 +1469,13 @@ export function DesktopShell({
       />
       {isDraggingFiles ? (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm">
-          <div className="rounded-md border bg-background px-4 py-3 text-sm font-medium shadow-lg">
-            Drop vector or raster files to add layers
+          <div className="max-w-sm rounded-md border bg-background px-4 py-3 text-center shadow-lg">
+            <p className="text-sm font-medium">
+              {t("toolbar.fileDrop.overlayTitle")}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("toolbar.fileDrop.overlaySubtext")}
+            </p>
           </div>
         </div>
       ) : null}
