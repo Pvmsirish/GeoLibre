@@ -46,6 +46,7 @@ import {
   Locate,
   MapPinned,
   LayoutPanelTop,
+  Moon,
   Palette,
   PanelLeft,
   PanelRight,
@@ -53,6 +54,7 @@ import {
   RotateCcw,
   Settings,
   SlidersHorizontal,
+  Sun,
   Type,
   Trash2,
   TriangleAlert,
@@ -74,6 +76,7 @@ import {
   type UpdateSettings,
 } from "../../hooks/useDesktopSettings";
 import { useLanguage } from "../../hooks/useLanguage";
+import type { ThemeMode } from "../../hooks/useThemeMode";
 import { isTauri } from "../../lib/is-tauri";
 import { THEME_SCHEMES, type ThemeScheme } from "../../lib/theme-schemes";
 import type { UpdateNotificationLevel } from "../../lib/updates";
@@ -138,6 +141,10 @@ interface SettingsDialogProps {
   onOpenManagePlugins: () => void;
   /** Toggleable plugins for the Interface (UI profile) section (issue #500). */
   profilePlugins: ProfilePlugin[];
+  /** Current light/dark mode, surfaced as toggles in Appearance (issue #716). */
+  themeMode: ThemeMode;
+  /** Flip the light/dark mode; the Appearance cards drive the same toggle. */
+  onToggleThemeMode: () => void;
 }
 
 const SECTION_ITEMS: Array<{
@@ -335,6 +342,8 @@ export function SettingsDialog({
   showLabels = true,
   onOpenManagePlugins,
   profilePlugins,
+  themeMode,
+  onToggleThemeMode,
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const {
@@ -361,6 +370,16 @@ export function SettingsDialog({
     null,
   );
   const shareTokenInputRef = useRef<HTMLInputElement>(null);
+  // The nav button for the active section. Focus follows the active section so
+  // the focus ring never strands on a different item than the visible pane
+  // (Safari keeps focus on the previously focused button after a mouse click,
+  // so the ring would otherwise stay on the first item, see #713).
+  const activeSectionButtonRef = useRef<HTMLButtonElement>(null);
+  // After the deep-link effect focuses its target field and clears
+  // `pendingFocus`, the nav-focus effect re-runs (pendingFocus is in its deps)
+  // and would steal focus back. This guards exactly that one re-run so the
+  // deep-linked field keeps focus (#720 review).
+  const skipNextNavFocusRef = useRef(false);
   // A gated section is dropped from the nav, but `section` can still point at one
   // (its initial value is "map"), so render the first visible section instead to
   // never expose gated content to a restricted profile.
@@ -469,7 +488,29 @@ export function SettingsDialog({
     const id = window.requestAnimationFrame(() => {
       shareTokenInputRef.current?.focus();
       shareTokenInputRef.current?.select();
+      // Set the guard BEFORE clearing pendingFocus: the clear re-runs the
+      // nav-focus effect, and because this write is synchronous and lexically
+      // first, the ref is already true when that run reads it, so it skips and
+      // leaves focus on the field we just focused.
+      skipNextNavFocusRef.current = true;
       setPendingFocus(null);
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open, pendingFocus, effectiveSection]);
+
+  // Keep the focus ring on the active section's nav button. Without this the
+  // ring strands on whichever button was focused when the dialog opened (the
+  // first one, or where a click left it on Safari) while the highlight and pane
+  // move to the selected section (#713). Skipped while a deep-link focus is
+  // pending so it does not steal focus from the field that request targets.
+  useEffect(() => {
+    if (!open || pendingFocus) return;
+    if (skipNextNavFocusRef.current) {
+      skipNextNavFocusRef.current = false;
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      activeSectionButtonRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(id);
   }, [open, pendingFocus, effectiveSection]);
@@ -834,6 +875,7 @@ export function SettingsDialog({
     return (
       <Button
         key={item.id}
+        ref={effectiveSection === item.id ? activeSectionButtonRef : undefined}
         className="justify-start"
         size="sm"
         type="button"
@@ -1389,6 +1431,42 @@ export function SettingsDialog({
                   </div>
                   <div className="space-y-3">
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("settings.appearance.themeMode")}
+                    </h4>
+                    {/* Light/dark cards so the mode lives beside the accent
+                        color instead of only on the toolbar (#716). The mode is
+                        a two-state toggle, so a non-active card just flips it. */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {(["light", "dark"] as const).map((mode) => {
+                        const active = themeMode === mode;
+                        const ModeIcon = mode === "light" ? Sun : Moon;
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => {
+                              if (!active) onToggleThemeMode();
+                            }}
+                            className={cn(
+                              "flex items-center gap-2.5 rounded-md border p-3 text-sm transition-colors",
+                              active
+                                ? "border-primary ring-2 ring-ring"
+                                : "hover:bg-accent",
+                            )}
+                          >
+                            <ModeIcon className="h-5 w-5 shrink-0" />
+                            <span>{t(`settings.appearance.mode.${mode}`)}</span>
+                            {active ? (
+                              <Check className="ml-auto h-4 w-4 text-primary" />
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       {t("settings.appearance.accentColor")}
                     </h4>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -1463,9 +1541,6 @@ export function SettingsDialog({
                         </code>
                       </label>
                     ) : null}
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.appearance.modeNote")}
-                    </p>
                   </div>
                 </div>
               ) : null}

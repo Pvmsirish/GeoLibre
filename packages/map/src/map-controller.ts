@@ -909,6 +909,17 @@ export class MapController {
   }
 
   /**
+   * Animate the map back to flat (pitch 0), leaving the center, zoom, and
+   * bearing untouched. The pitch counterpart to {@link resetNorth}, so the
+   * heading and tilt can be reset independently.
+   */
+  resetPitch(): void {
+    // Match MapLibre's native resetNorth/resetNorthPitch 1s animation so the
+    // sibling orientation resets feel consistent (easeTo defaults to 300ms).
+    this.map?.easeTo({ pitch: 0, duration: 1000 });
+  }
+
+  /**
    * Query rendered features at a geographic point, for the scripting API's
    * "identify" command. Mirrors the in-app Identify tool: it queries the same
    * candidate style layers MapLibre renders for each layer
