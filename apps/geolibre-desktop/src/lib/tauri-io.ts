@@ -1,4 +1,8 @@
-import { parseProject, type GeoLibreProject } from "@geolibre/core";
+import {
+  hasPathTraversal,
+  parseProject,
+  type GeoLibreProject,
+} from "@geolibre/core";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -10,6 +14,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { unzip } from "fflate";
 import type { FeatureCollection } from "geojson";
+import i18next from "i18next";
 import shp from "shpjs";
 import {
   DELIMITER_CANDIDATES,
@@ -109,6 +114,53 @@ interface SaveTextFileOptions {
 interface SaveBinaryFileOptions extends SaveTextFileOptions {}
 
 const SHAPEFILE_SIDECAR_EXTENSIONS = ["dbf", "shx", "prj", "cpg"];
+const VECTOR_FILE_DIALOG_EXTENSIONS = [
+  "geojson",
+  "json",
+  "gpkg",
+  "geoparquet",
+  "parquet",
+  "fgb",
+  "flatgeobuf",
+  "csv",
+  "tsv",
+  "kml",
+  "kmz",
+  "gml",
+  "gpx",
+  "dxf",
+  "tab",
+  "shp",
+  "zip",
+];
+
+const RESTORABLE_VECTOR_PATH = new RegExp(
+  `\\.(${VECTOR_FILE_DIALOG_EXTENSIONS.join("|")})$`,
+  "i",
+);
+
+/**
+ * Whether a path ends in a recognized vector extension. Used as a whitelist
+ * guard before re-reading a project's `sourcePath` off disk, so a crafted path
+ * pointing at a non-vector file is rejected.
+ *
+ * @param path - The path to check.
+ * @returns True when the extension is a loadable vector format.
+ */
+export function isRestorableVectorPath(path: string): boolean {
+  return RESTORABLE_VECTOR_PATH.test(path);
+}
+
+// Built at call time so the filter-group label shown in the native file dialog
+// is translated (a module-level constant would freeze the English string).
+function vectorFileDialogFilters(): FileDialogFilter[] {
+  return [
+    {
+      name: i18next.t("toolbar.item.vectorDataFilter"),
+      extensions: VECTOR_FILE_DIALOG_EXTENSIONS,
+    },
+  ];
+}
 
 export interface LoadedVectorLayer {
   data: FeatureCollection;
@@ -555,6 +607,8 @@ export interface PickedVectorFile {
    * same directory; empty for any other format.
    */
   companionFiles: File[];
+  /** Absolute filesystem path the main file was read from. */
+  sourcePath: string;
 }
 
 /**
@@ -571,7 +625,10 @@ export interface PickedVectorFile {
  * @returns The picked vector files, each with its shapefile sidecars.
  */
 export async function pickVectorFilesWithSidecars(): Promise<PickedVectorFile[]> {
-  const selected = await open({ multiple: true });
+  const selected = await open({
+    filters: vectorFileDialogFilters(),
+    multiple: true,
+  });
   if (!selected) return [];
   // `isVectorFileName` drops rasters, project files, and shapefile sidecars, so
   // a sidecar picked on its own never becomes its own (unreadable) layer.
@@ -593,12 +650,59 @@ export async function pickVectorFilesWithSidecars(): Promise<PickedVectorFile[]>
               (sibling) => new File([toArrayBuffer(sibling.data)], sibling.name),
             )
           : [];
-      picked.push({ file, companionFiles });
+      picked.push({ file, companionFiles, sourcePath: path });
     } catch (error) {
       console.warn(`Could not read the selected file "${path}".`, error);
     }
   }
   return picked;
+}
+
+/**
+ * Reads a single local vector file (and, for a `.shp`, its shapefile sidecars)
+ * back into browser `File`s from an absolute path, so the Add Vector Layer
+ * restore can reload a desktop local-file layer when a saved project reopens.
+ * Mirrors {@link pickVectorFilesWithSidecars} for one already-known path.
+ *
+ * @param path - The absolute filesystem path persisted on the layer.
+ * @returns The file with its sidecars, or null off the desktop host or when it
+ *   can no longer be read (moved or deleted).
+ */
+export async function readVectorFileWithSidecars(
+  path: string,
+): Promise<{ file: File; companionFiles: File[] } | null> {
+  // Reject `..` segments as well as relative paths: the path comes from a
+  // (possibly hand-edited) project file, so a traversal must not reach outside
+  // wherever Tauri's filesystem scope allows. The scope is the real boundary;
+  // this is cheap defense-in-depth.
+  if (!isTauri() || !isAbsoluteLocalPath(path) || hasPathTraversal(path)) {
+    return null;
+  }
+  try {
+    const file = new File(
+      [toArrayBuffer(await readFile(path))],
+      browserSafeFileName(path),
+    );
+    const companionFiles =
+      fileExtension(path) === "shp"
+        ? (await readShapefileSiblings(path)).map(
+            (sibling) => new File([toArrayBuffer(sibling.data)], sibling.name),
+          )
+        : [];
+    return { file, companionFiles };
+  } catch (error) {
+    console.warn(`Could not read local vector file "${path}".`, error);
+    return null;
+  }
+}
+
+export function isAbsoluteLocalPath(path: string): boolean {
+  const trimmed = path.trim();
+  // Accept POSIX paths and Windows drive-letter paths only. UNC paths
+  // (\\server\share) are deliberately rejected: reading one can make Windows
+  // auto-authenticate against a remote host (NTLM hash capture), and a remote
+  // share is not a supported local data source.
+  return trimmed.startsWith("/") || /^[a-z]:[\\/]/i.test(trimmed);
 }
 
 async function loadTauriVectorFile(

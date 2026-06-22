@@ -7,15 +7,20 @@ import {
 import type { GeoLibrePickedVectorFile } from "../packages/plugins/src/types";
 
 function createSink() {
-  const calls: Array<{ name: string; companionFiles?: string[] }> = [];
+  const calls: Array<{
+    name: string;
+    companionFiles?: string[];
+    sourcePath?: string;
+  }> = [];
   const sink = {
     addData: async (
       source: File,
-      options?: { companionFiles?: File[] },
+      options?: { companionFiles?: File[]; sourcePath?: string },
     ) => {
       calls.push({
         name: source.name,
         companionFiles: options?.companionFiles?.map((file) => file.name),
+        sourcePath: options?.sourcePath,
       });
       return {} as never;
     },
@@ -33,6 +38,7 @@ describe("addPickedVectorFiles", () => {
           new File(["shx"], "cities.shx"),
           new File(["dbf"], "cities.dbf"),
         ],
+        sourcePath: "/data/cities.shp",
       },
     ];
 
@@ -41,6 +47,7 @@ describe("addPickedVectorFiles", () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].name, "cities.shp");
     assert.deepEqual(calls[0].companionFiles, ["cities.shx", "cities.dbf"]);
+    assert.equal(calls[0].sourcePath, "/data/cities.shp");
   });
 
   it("omits companionFiles for non-shapefile picks", async () => {

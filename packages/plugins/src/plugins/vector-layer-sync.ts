@@ -64,6 +64,26 @@ export function isVectorControlStoreLayer(layer: GeoLibreLayer): boolean {
   );
 }
 
+function hasRestorableVectorUrl(layer: GeoLibreLayer): boolean {
+  return typeof layer.source.url === "string" && layer.source.url.trim() !== "";
+}
+
+/**
+ * Detects an Add Vector Layer layer whose data is local (no fetchable URL) and
+ * so *can* be embedded in a saved project — covering a browser-picked file, a
+ * desktop path-backed file, and a layer restored from previously embedded
+ * GeoJSON. Used to materialize features for both the Embed choice and a Share
+ * upload. A desktop path-backed layer is included on purpose: on the same
+ * machine it can reload from its path, but a shared/embedded copy still needs
+ * its data so it survives on a machine that lacks the file.
+ *
+ * @param layer - A store layer.
+ * @returns True when the layer's data can be embedded.
+ */
+export function isEmbeddableLocalVectorLayer(layer: GeoLibreLayer): boolean {
+  return isVectorControlStoreLayer(layer) && !hasRestorableVectorUrl(layer);
+}
+
 /**
  * Builds the store layer mirroring a control vector layer snapshot.
  *
@@ -82,8 +102,15 @@ export function createVectorStoreLayer(
   panelCollapsed = true,
 ): GeoLibreLayer {
   const url = info.source.kind === "url" ? info.source.url : undefined;
+  // A desktop host echoes the absolute path a local file was read from, so the
+  // layer can be re-read from disk on reopen; the browser only knows the file
+  // name. Prefer the path, so it (not the bare name) is what gets persisted.
+  const localFilePath =
+    info.source.kind === "file" ? info.source.path : undefined;
   const sourcePath =
-    url ?? (info.source.kind === "file" ? info.source.fileName : undefined);
+    url ??
+    localFilePath ??
+    (info.source.kind === "file" ? info.source.fileName : undefined);
   return {
     id: info.id,
     name: info.name,
@@ -119,6 +146,10 @@ export function createVectorStoreLayer(
       // restoreVectorLayers can replay URL-backed layers when a saved
       // project is reopened.
       vectorSource: info.source.kind,
+      // Marks a local file the host gave an absolute path for (desktop), so
+      // restoreVectorLayers re-reads it from `sourcePath` rather than dropping
+      // it. A browser-picked file has no path and so no flag.
+      ...(localFilePath ? { localFileReloadable: true } : {}),
       vectorState: serializableVectorState(info),
       ...(info.geometryType !== "unknown"
         ? { geometryType: info.geometryType }
@@ -177,8 +208,12 @@ export function syncVectorLayersToStore(control: VectorSyncableControl): void {
         !recordsEqual(existing.metadata, layer.metadata)
       ) {
         useAppStore.getState().updateLayer(layer.id, {
-          // Replace metadata wholesale so stale keys (bounds, featureCount)
-          // cannot survive a layer being swapped out under the same id.
+          // Replace metadata wholesale so stale keys (bounds, featureCount,
+          // and any embeddedGeoJSON loaded from the project) cannot survive a
+          // layer being swapped out under the same id. embeddedGeoJSON is not
+          // kept live: the web Save flow re-materializes it fresh from the
+          // control (getLayerGeoJSON), so a reopened layer drops its loaded
+          // blob here and re-embeds current data on the next save.
           metadata: layer.metadata,
           opacity: layer.opacity,
           source: layer.source,

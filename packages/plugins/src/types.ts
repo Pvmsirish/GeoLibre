@@ -90,6 +90,12 @@ export interface GeoLibrePickedVectorFile {
    * `addData(file, { companionFiles })` so a loose `.shp` loads as one layer.
    */
   companionFiles: File[];
+  /**
+   * Absolute filesystem path the main file was read from, so the Add Vector
+   * Layer panel can persist it (`addData(file, { sourcePath })`) and re-read the
+   * file when a saved project reopens.
+   */
+  sourcePath?: string;
 }
 
 export interface GeoLibreAppAPI {
@@ -124,13 +130,26 @@ export interface GeoLibreAppAPI {
   /**
    * Prompt the user (desktop only) to pick one or more vector files via the
    * native dialog, returning each with any shapefile sidecars discovered in the
-   * same directory. This lets a host with filesystem access load a loose `.shp`
-   * without the user selecting every component (`.shx`, `.dbf`, ...). Present
+   * same directory and the absolute `sourcePath` it was read from. The sidecars
+   * let a host with filesystem access load a loose `.shp` without the user
+   * selecting every component (`.shx`, `.dbf`, ...); the path lets the Add
+   * Vector Layer panel persist it so the layer can be re-read on reopen. Present
    * only on hosts with filesystem access (the desktop build); absent on the web
-   * (browsers cannot read sibling files), so its presence doubles as a desktop
-   * capability check. Resolves to an empty array when the dialog is cancelled.
+   * (browsers cannot read sibling files or expose paths), so its presence
+   * doubles as a desktop capability check. Resolves to an empty array when the
+   * dialog is cancelled.
    */
   pickVectorFilesWithSidecars?: () => Promise<GeoLibrePickedVectorFile[]>;
+  /**
+   * Read a local vector file back into a File (with any shapefile sidecars) from
+   * the absolute path persisted on a layer's `sourcePath`, so the Add Vector
+   * Layer restore can reload a desktop local-file layer when a project reopens.
+   * Resolves to null off the desktop host, or when the file can no longer be
+   * read (moved or deleted).
+   */
+  readLocalVectorFile?: (
+    path: string,
+  ) => Promise<{ file: File; companionFiles: File[] } | null>;
   /**
    * Save text content to a file chosen by the user. The host handles the
    * platform specifics (a native save dialog under Tauri, a browser download

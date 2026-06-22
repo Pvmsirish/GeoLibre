@@ -8,6 +8,7 @@ import {
 import type { VectorLayerInfo, VectorLayerStyle } from "maplibre-gl-vector";
 import {
   createVectorStoreLayer,
+  isEmbeddableLocalVectorLayer,
   isVectorControlStoreLayer,
   removeVectorStoreLayers,
   resetVectorStoreSyncSuspension,
@@ -92,6 +93,43 @@ function otherStoreLayer(id = "unrelated"): GeoLibreLayer {
   };
 }
 
+describe("isEmbeddableLocalVectorLayer", () => {
+  it("flags a browser-picked local file (no URL, no reload path)", () => {
+    const layer = createVectorStoreLayer(
+      vectorInfo({ source: { kind: "file", fileName: "local.gpkg" } }),
+    );
+    assert.equal(isEmbeddableLocalVectorLayer(layer), true);
+  });
+
+  it("excludes a URL-backed layer", () => {
+    const layer = createVectorStoreLayer(vectorInfo());
+    assert.equal(isEmbeddableLocalVectorLayer(layer), false);
+  });
+
+  it("includes a desktop path-backed layer (so a shared copy keeps its data)", () => {
+    const layer = createVectorStoreLayer(
+      vectorInfo({
+        source: {
+          kind: "file",
+          fileName: "countries.gpkg",
+          path: "/home/user/countries.gpkg",
+        },
+      }),
+    );
+    // It can reload from its path on the same machine, but an embedded/shared
+    // copy still needs its data for a machine that lacks the file.
+    assert.equal(isEmbeddableLocalVectorLayer(layer), true);
+  });
+
+  it("excludes a non-vector-control layer", () => {
+    const layer = createVectorStoreLayer(
+      vectorInfo({ source: { kind: "file", fileName: "local.gpkg" } }),
+    );
+    const plainLayer = { ...layer, metadata: {} };
+    assert.equal(isEmbeddableLocalVectorLayer(plainLayer), false);
+  });
+});
+
 describe("createVectorStoreLayer", () => {
   it("mirrors a URL layer as an external custom layer", () => {
     const layer = createVectorStoreLayer(
@@ -149,8 +187,27 @@ describe("createVectorStoreLayer", () => {
     assert.equal(layer.source.url, undefined);
     assert.equal(layer.sourcePath, "local.gpkg");
     assert.equal(layer.metadata.vectorSource, "file");
+    assert.equal("localFileReloadable" in layer.metadata, false);
     assert.equal("bounds" in layer.metadata, false);
     assert.equal("featureCount" in layer.metadata, false);
+  });
+
+  it("persists a desktop file's absolute path and marks it reloadable", () => {
+    const layer = createVectorStoreLayer(
+      vectorInfo({
+        source: {
+          kind: "file",
+          fileName: "countries.gpkg",
+          path: "/home/user/data/countries.gpkg",
+        },
+      }),
+    );
+
+    // The absolute path (not the bare name) is persisted so restore can
+    // re-read the file from disk, and the flag tells restore it can.
+    assert.equal(layer.sourcePath, "/home/user/data/countries.gpkg");
+    assert.equal(layer.metadata.localFileReloadable, true);
+    assert.equal(layer.metadata.vectorSource, "file");
   });
 
   it("marks tile-rendered layers as vector-tiles", () => {
@@ -385,6 +442,31 @@ describe("syncVectorLayersToStore", () => {
     syncVectorLayersToStore(fakeControl([vectorInfo()]).control);
 
     assert.equal(useAppStore.getState().layers[0], before);
+  });
+
+  it("drops a loaded embeddedGeoJSON blob on sync (re-materialized at save)", () => {
+    // embeddedGeoJSON is not kept live in the store: a project loads it, restore
+    // replays it into the control, and this sync then replaces the layer's
+    // metadata without it. The web Save flow re-materializes it from the control
+    // (getLayerGeoJSON), so the stale loaded blob must not survive here.
+    const info = vectorInfo({
+      source: { kind: "file", fileName: "local.geojson" },
+    });
+    const { control } = fakeControl([info]);
+    syncVectorLayersToStore(control);
+    useAppStore.getState().updateLayer("vector-1", {
+      metadata: {
+        ...useAppStore.getState().layers[0].metadata,
+        embeddedGeoJSON: { type: "FeatureCollection" as const, features: [] },
+      },
+    });
+
+    syncVectorLayersToStore(fakeControl([info]).control);
+
+    assert.equal(
+      "embeddedGeoJSON" in useAppStore.getState().layers[0].metadata,
+      false,
+    );
   });
 
   it("does nothing while sync is suspended", () => {
