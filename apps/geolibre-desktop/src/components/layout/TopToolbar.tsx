@@ -22,6 +22,7 @@ import {
   openThreeDTilesLayerPanel,
   openVectorLayerPanel,
   openZarrLayerPanel,
+  setAnnotationLabels,
   setBasemapControlLabels,
   setGraticuleLabels,
   setReverseGeocodeLabels,
@@ -167,6 +168,27 @@ export function TopToolbar({
     setBasemapControlLabels({
       confirmStyleReplace: (name, count) =>
         t("basemaps.confirmStyleReplace", { name, count }),
+    });
+    setAnnotationLabels({
+      toolbar: t("annotations.toolbar"),
+      layerName: t("annotations.layerName"),
+      tools: {
+        text: t("annotations.tools.text"),
+        arrow: t("annotations.tools.arrow"),
+        rectangle: t("annotations.tools.rectangle"),
+        ellipse: t("annotations.tools.ellipse"),
+        freehand: t("annotations.tools.freehand"),
+      },
+      color: t("annotations.color"),
+      width: t("annotations.width"),
+      widthOptions: {
+        thin: t("annotations.widthOptions.thin"),
+        medium: t("annotations.widthOptions.medium"),
+        thick: t("annotations.widthOptions.thick"),
+      },
+      deleteLast: t("annotations.deleteLast"),
+      clearAll: t("annotations.clearAll"),
+      textPlaceholder: t("annotations.textPlaceholder"),
     });
     setGraticuleLabels({
       title: t("graticule.title"),

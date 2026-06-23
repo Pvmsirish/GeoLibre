@@ -1677,7 +1677,14 @@ function applyVectorDataRenderLayers(
           visibility,
         },
         paint: {
-          "text-color": styleValue(layer.style, "textColor"),
+          // Honor an optional per-feature `text-color` (used by annotation text
+          // labels so each can keep its own color); text markers without it fall
+          // back to the layer's text color.
+          "text-color": [
+            "coalesce",
+            ["get", "text-color"],
+            styleValue(layer.style, "textColor"),
+          ],
           "text-halo-color": styleValue(layer.style, "textHaloColor"),
           "text-halo-width": Math.max(
             0,
@@ -2635,7 +2642,25 @@ function ensureLayer(
   }
   const validBeforeId =
     beforeId && map.getLayer(beforeId) ? beforeId : undefined;
-  map.addLayer(spec, validBeforeId);
+  // MapLibre's addLayer rejects (and silently drops, without throwing) a layer
+  // whose paint carries an explicit `null`. `null` is only valid as a
+  // setPaintProperty reset, which the update branch above uses; on first add it
+  // must be stripped so e.g. `fill-pattern: null` (the "no pattern" reset) does
+  // not blank the whole fill layer. Properties simply absent default correctly.
+  // Scoped to `paint` deliberately: `fill-pattern` is the only reset-via-null in
+  // this file. Extend to `layout` here if a layout property ever uses the same
+  // null-reset pattern.
+  const addSpec =
+    spec.paint &&
+    Object.values(spec.paint).some((value) => value === null)
+      ? {
+          ...spec,
+          paint: Object.fromEntries(
+            Object.entries(spec.paint).filter(([, value]) => value !== null),
+          ),
+        }
+      : spec;
+  map.addLayer(addSpec, validBeforeId);
 }
 
 function setLayerZoomRange(
