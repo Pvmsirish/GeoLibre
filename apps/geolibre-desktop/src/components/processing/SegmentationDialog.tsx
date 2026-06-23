@@ -20,6 +20,7 @@ import {
 import {
   AlertCircle,
   CheckCircle2,
+  Download,
   FolderOpen,
   Info,
   Loader2,
@@ -38,6 +39,7 @@ import { useTranslation } from "react-i18next";
 import { isTauri, openLocalDataFileWithFallback } from "../../lib/tauri-io";
 import { reprojectFeatureCollectionToWgs84 } from "../../lib/duckdb-vector-loader";
 import { startGeoLibreSidecar } from "../../lib/sidecar";
+import { UPDATE_URL } from "../../lib/updates";
 import {
   SidecarHelpBanner,
   SIDECAR_PORT,
@@ -231,6 +233,27 @@ export function SegmentationDialog({
   ]);
 
   const available = status?.available === true;
+  // In the browser the form is shown but disabled rather than hidden (issue
+  // #777): web users still see the full capability they're missing, which
+  // motivates the desktop download, but cannot interact with inputs that do
+  // nothing. Gating on `available` (not on `status !== null`) keeps the form
+  // disabled during the async probe too; `available` becomes true only when a
+  // proxied sidecar is reachable, the rare web case where segmentation works.
+  const webUnavailable = !isTauri() && !available;
+
+  // Browser users cannot run segmentation here, so point them at the desktop
+  // download instead of the unusable "Start server" action (issue #777). This
+  // is rendered both in the resolved "unavailable" banner and while the status
+  // probe is still in flight, so a slow or hanging probe (e.g. a silent packet
+  // drop with no explicit fetch timeout) never leaves them without an action.
+  const downloadDesktopButton = (
+    <Button asChild variant="outline" className="gap-2">
+      <a href={UPDATE_URL} target="_blank" rel="noopener noreferrer">
+        <Download className="h-4 w-4" />
+        {t("segmentation.downloadDesktop")}
+      </a>
+    </Button>
+  );
 
   return (
     <Dialog
@@ -249,10 +272,26 @@ export function SegmentationDialog({
 
         <div className="flex flex-col gap-3">
           {checking && (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {t("segmentation.status.checking")}
-            </p>
+            // For browser users the spinner shares the resolved banner's panel
+            // framing so the download CTA below it keeps its frame instead of
+            // jumping when the probe settles. Desktop has no CTA here, so it
+            // keeps the plain inline spinner it had before.
+            <div
+              className={
+                webUnavailable
+                  ? "grid gap-2 rounded-md border border-border bg-muted/40 p-3"
+                  : "grid gap-2"
+              }
+            >
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("segmentation.status.checking")}
+              </p>
+              {/* Keep a download CTA visible while the probe runs so browser
+                  users always have an action, even if it never settles. During
+                  the probe `webUnavailable` reduces to `!isTauri()`. */}
+              {webUnavailable && downloadDesktopButton}
+            </div>
           )}
 
           {!checking && status && !available && (
@@ -262,8 +301,9 @@ export function SegmentationDialog({
                 {status.message}
               </p>
               {/* Launching the sidecar is a desktop-only (Tauri) capability;
-                  hide the action in the browser build where it cannot work. */}
-              {isTauri() && (
+                  in the browser build it cannot work, so offer the desktop
+                  download instead. */}
+              {isTauri() ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -278,10 +318,16 @@ export function SegmentationDialog({
                   )}
                   {t("segmentation.startServer")}
                 </Button>
+              ) : (
+                downloadDesktopButton
               )}
             </div>
           )}
 
+          {/* The configuration form is always rendered. In the browser it is
+              shown but disabled (`webUnavailable`) so web users still see the
+              full capability and are pointed to the desktop download above,
+              without being able to interact with inputs that do nothing. */}
           {/* Image source */}
           <div className="grid gap-1.5">
             <Label htmlFor="seg-image" className="text-xs">
@@ -292,6 +338,7 @@ export function SegmentationDialog({
               <Input
                 id="seg-image"
                 readOnly
+                disabled={webUnavailable}
                 value={imageName}
                 placeholder={t("segmentation.imagePlaceholder")}
               />
@@ -301,6 +348,7 @@ export function SegmentationDialog({
                 size="icon"
                 title={t("segmentation.chooseImage")}
                 onClick={() => void pickImage()}
+                disabled={webUnavailable}
               >
                 <FolderOpen className="h-4 w-4" />
               </Button>
@@ -315,6 +363,7 @@ export function SegmentationDialog({
             <Select
               id="seg-mode"
               value={mode}
+              disabled={webUnavailable}
               onChange={(e) =>
                 setMode(e.target.value as "text" | "automatic")
               }
@@ -336,6 +385,7 @@ export function SegmentationDialog({
                 <Input
                   id="seg-prompt"
                   value={prompt}
+                  disabled={webUnavailable}
                   placeholder={t("segmentation.promptPlaceholder")}
                   onChange={(e) => setPrompt(e.target.value)}
                 />
@@ -350,6 +400,7 @@ export function SegmentationDialog({
                   min={0}
                   max={1}
                   step={0.05}
+                  disabled={webUnavailable}
                   value={String(confidence)}
                   onChange={(e) => {
                     if (e.target.value === "") {
