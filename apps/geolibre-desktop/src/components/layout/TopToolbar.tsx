@@ -23,9 +23,11 @@ import {
   openVectorLayerPanel,
   openZarrLayerPanel,
   setBasemapControlLabels,
+  setGraticuleLabels,
   setReverseGeocodeLabels,
   DECK_VIZ_PLUGIN_ID,
   DIRECTIONS_PLUGIN_ID,
+  GRATICULE_PLUGIN_ID,
   REVERSE_GEOCODE_PLUGIN_ID,
   EFFECTS_PLUGIN_ID,
 } from "@geolibre/plugins";
@@ -165,6 +167,27 @@ export function TopToolbar({
     setBasemapControlLabels({
       confirmStyleReplace: (name, count) =>
         t("basemaps.confirmStyleReplace", { name, count }),
+    });
+    setGraticuleLabels({
+      title: t("graticule.title"),
+      controlTitle: t("graticule.controlTitle"),
+      spacing: t("graticule.spacing"),
+      spacingAuto: t("graticule.spacingAuto"),
+      spacingFixed: t("graticule.spacingFixed"),
+      interval: t("graticule.interval"),
+      lineColor: t("graticule.lineColor"),
+      lineWidth: t("graticule.lineWidth"),
+      lineOpacity: t("graticule.lineOpacity"),
+      dashedLines: t("graticule.dashedLines"),
+      showLabels: t("graticule.showLabels"),
+      labelFormat: t("graticule.labelFormat"),
+      formatDecimal: t("graticule.formatDecimal"),
+      formatDms: t("graticule.formatDms"),
+      labelEdges: t("graticule.labelEdges"),
+      edgesLeftBottom: t("graticule.edgesLeftBottom"),
+      edgesAll: t("graticule.edgesAll"),
+      labelColor: t("graticule.labelColor"),
+      labelSize: t("graticule.labelSize"),
     });
   }, [t]);
 
@@ -766,8 +789,8 @@ export function TopToolbar({
       run: () => setAboutOpen(true),
     },
     // Plugins — one toggle per registered plugin. Atmospheric Effects,
-    // Directions, Reverse Geocode, and the deck.gl viz renderer are excluded
-    // here because they are surfaced under Controls / Add Data instead
+    // Directions, Reverse Geocode, Graticule, and the deck.gl viz renderer are
+    // excluded here because they are surfaced under Controls / Add Data instead
     // (matching the menus).
     ...plugins
       .filter(
@@ -775,6 +798,7 @@ export function TopToolbar({
           plugin.id !== EFFECTS_PLUGIN_ID &&
           plugin.id !== DIRECTIONS_PLUGIN_ID &&
           plugin.id !== REVERSE_GEOCODE_PLUGIN_ID &&
+          plugin.id !== GRATICULE_PLUGIN_ID &&
           plugin.id !== DECK_VIZ_PLUGIN_ID,
       )
       .map((plugin) => ({
@@ -916,6 +940,7 @@ export function TopToolbar({
           effectsActive={isActive(EFFECTS_PLUGIN_ID)}
           directionsActive={isActive(DIRECTIONS_PLUGIN_ID)}
           reverseGeocodeActive={isActive(REVERSE_GEOCODE_PLUGIN_ID)}
+          graticuleActive={isActive(GRATICULE_PLUGIN_ID)}
           onToggleMapControl={toggleMapControl}
           onToggleEffects={() => toggle(EFFECTS_PLUGIN_ID, appApi)}
           getEffectsSettings={getEffectsSettings}
@@ -923,6 +948,7 @@ export function TopToolbar({
           onCommitEffectsSettings={commitEffectsSettings}
           onToggleDirections={consent.handleToggleDirections}
           onToggleReverseGeocode={consent.handleToggleReverseGeocode}
+          onToggleGraticule={() => toggle(GRATICULE_PLUGIN_ID, appApi)}
           onOpenFieldCollection={() => setFieldCollectionOpen(true)}
         />
       )}
