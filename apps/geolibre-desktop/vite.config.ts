@@ -8,7 +8,8 @@ import type {
   RollupOptions,
   WarningHandlerWithDefault,
 } from "rollup";
-import { defineConfig, type Plugin } from "vite";
+import { fileURLToPath } from "node:url";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { bundledPlugins } from "./vite-plugins/bundled-plugins";
 import { copyRtlText } from "./vite-plugins/copy-rtl-text";
@@ -22,6 +23,39 @@ const APP_BASE = process.env.GEOLIBRE_APP_BASE;
 const APP_VERSION = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ).version as string;
+
+// Vite resolves `mode` from the `--mode` CLI flag (defaulting to `development`
+// for `vite`/`vite dev` and `production` for `vite build`). This shim runs at
+// module load, before `defineConfig` receives the resolved mode, so read
+// `--mode` from argv directly and fall back to NODE_ENV (which Vite's CLI sets
+// from the command). This lets `loadEnv` pick up mode-specific files such as
+// `.env.staging.local` under `vite build --mode staging`, not just NODE_ENV.
+function resolveViteMode(): string {
+  const argv = process.argv;
+  const inline = argv.find((arg) => arg.startsWith("--mode="));
+  if (inline) return inline.slice("--mode=".length);
+  const flagIndex = argv.findIndex((arg) => arg === "--mode" || arg === "-m");
+  if (flagIndex !== -1 && argv[flagIndex + 1]) return argv[flagIndex + 1];
+  return process.env.NODE_ENV || "development";
+}
+
+// Vite only exposes `VITE_`-prefixed vars to the client, so the Google Maps key
+// is surfaced as `VITE_GOOGLE_MAPS_API_KEY`. Accept a bare `GOOGLE_MAPS_API_KEY`
+// too (handy for local shell/CI testing) and copy it into the prefixed name.
+// `loadEnv(mode, dir, "")` reads the app's `.env*` files with no prefix filter,
+// so a key placed in `apps/geolibre-desktop/.env.local` also works, not just a
+// real shell env var (process.env alone would miss the file).
+const CONFIG_DIR = path.dirname(fileURLToPath(import.meta.url));
+const FILE_ENV = loadEnv(resolveViteMode(), CONFIG_DIR, "");
+if (!process.env.VITE_GOOGLE_MAPS_API_KEY) {
+  const googleMapsApiKey =
+    process.env.GOOGLE_MAPS_API_KEY ||
+    FILE_ENV.VITE_GOOGLE_MAPS_API_KEY ||
+    FILE_ENV.GOOGLE_MAPS_API_KEY;
+  if (googleMapsApiKey) {
+    process.env.VITE_GOOGLE_MAPS_API_KEY = googleMapsApiKey;
+  }
+}
 
 // Tauri sets TAURI_ENV_* env vars while running its beforeBuildCommand
 // (`npm run build`), so their presence flags a desktop build. Used below to drop
